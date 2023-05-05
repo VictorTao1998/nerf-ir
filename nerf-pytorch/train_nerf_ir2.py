@@ -126,36 +126,20 @@ def main():
     )
     model_coarse.to(device)
 
-    model_env_coarse = None
+    #model_env_coarse = None
     model_env_fine = None
     if not cfg.dataset.is_rgb:
         ir_intrinsic = intrinsics[0,:,:].to(device)
         ir_intrinsic[:2,2] = ir_intrinsic[:2,2] * 2.
         ir_extrinsic = ir_poses[0,:,:].to(device)
-        model_env_coarse = getattr(models, cfg.models.env.type)(
-            num_layers=cfg.models.env.num_layers,
-            hidden_size=cfg.models.env.hidden_size,
-            skip_connect_every=cfg.models.env.skip_connect_every,
-            num_encoding_fn_xyz=cfg.models.env.num_encoding_fn_xyz,
-            #num_encoding_fn_dir=cfg.models.env.num_encoding_fn_dir,
-            include_input_xyz=cfg.models.env.include_input_xyz,
-            #include_input_dir=cfg.models.env.include_input_dir,
-            #use_viewdirs=cfg.models.env.use_viewdirs,
-            color_channel=1,
-            H = cfg.dataset.H,
-            W = cfg.dataset.W,
-            ir_intrinsic=ir_intrinsic,
-            ir_extrinsic=ir_extrinsic,
-            #ir_gt="/code/nerf-git/logs_sim_brdf_near_check/0/ir_pat.pt"
-        )
-        model_env_coarse.to(device)
+
         model_env_fine = getattr(models, cfg.models.env.type)(
-            num_layers=cfg.models.env.num_layers,
-            hidden_size=cfg.models.env.hidden_size,
-            skip_connect_every=cfg.models.env.skip_connect_every,
-            num_encoding_fn_xyz=cfg.models.env.num_encoding_fn_xyz,
+            #num_layers=cfg.models.env.num_layers,
+            #hidden_size=cfg.models.env.hidden_size,
+            #skip_connect_every=cfg.models.env.skip_connect_every,
+            #num_encoding_fn_xyz=cfg.models.env.num_encoding_fn_xyz,
             #num_encoding_fn_dir=cfg.models.env.num_encoding_fn_dir,
-            include_input_xyz=cfg.models.env.include_input_xyz,
+            #include_input_xyz=cfg.models.env.include_input_xyz,
             #include_input_dir=cfg.models.env.include_input_dir,
             #use_viewdirs=cfg.models.env.use_viewdirs,
             color_channel=1,
@@ -194,7 +178,7 @@ def main():
     trainable_parameters += list(model_fine.parameters())
     #trainable_parameters_env += list(model_env_fine.parameters())
     if not cfg.dataset.is_rgb:
-        trainable_parameters += list(model_env_coarse.parameters())
+        #trainable_parameters += list(model_env_coarse.parameters())
         trainable_parameters += list(model_env_fine.parameters())
     optimizer = getattr(torch.optim, cfg.optimizer.type)(
         trainable_parameters, lr=cfg.optimizer.lr
@@ -234,7 +218,7 @@ def main():
         model_coarse.load_state_dict(checkpoint["model_coarse_state_dict"])
         model_fine.load_state_dict(checkpoint["model_fine_state_dict"])
         if not cfg.dataset.is_rgb:
-            model_env_coarse.load_state_dict(checkpoint["model_env_coarse_state_dict"])
+            #model_env_coarse.load_state_dict(checkpoint["model_env_coarse_state_dict"])
             model_env_fine.load_state_dict(checkpoint["model_env_fine_state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         start_iter = checkpoint["iter"]
@@ -250,8 +234,8 @@ def main():
         param.requires_grad = True
     for param in model_fine.parameters():
         param.requires_grad = True
-    for param in model_env_coarse.parameters():
-        param.requires_grad = True
+    #for param in model_env_coarse.parameters():
+    #    param.requires_grad = True
     for param in model_env_fine.parameters():
         param.requires_grad = True
 
@@ -266,6 +250,16 @@ def main():
             for param in model_backup.parameters():
                 param.requires_grad = False
 
+        if i == cfg.experiment.joint_start:            
+            model_env_fine.ir_pattern.requires_grad = False
+            model_env_fine.static_ir_pat = True
+            model_coarse.train()
+            model_fine.train()
+            if not cfg.dataset.is_rgb:
+                model_env_fine.train()
+
+        
+        """
         if is_joint == True and i < cfg.experiment.joint_start:
             if i % cfg.experiment.swap_every == 0:
                 if train_depth:
@@ -274,15 +268,15 @@ def main():
                         param.requires_grad = False
                     for param in model_fine.parameters():
                         param.requires_grad = False
-                    for param in model_env_coarse.parameters():
-                        param.requires_grad = True
+                    #for param in model_env_coarse.parameters():
+                    #    param.requires_grad = True
                     for param in model_env_fine.parameters():
                         param.requires_grad = True
 
                     model_coarse.eval()
                     model_fine.eval()
                     if not cfg.dataset.is_rgb:
-                        model_env_coarse.train()
+                    #    model_env_coarse.train()
                         model_env_fine.train()
 
                     train_depth = False
@@ -292,15 +286,15 @@ def main():
                         param.requires_grad = True
                     for param in model_fine.parameters():
                         param.requires_grad = True
-                    for param in model_env_coarse.parameters():
-                        param.requires_grad = False
+                    #for param in model_env_coarse.parameters():
+                    #    param.requires_grad = False
                     for param in model_env_fine.parameters():
                         param.requires_grad = False
 
                     model_coarse.train()
                     model_fine.train()
                     if not cfg.dataset.is_rgb:
-                        model_env_coarse.eval()
+                    #    model_env_coarse.eval()
                         model_env_fine.eval()
                     
                     train_depth = True
@@ -310,8 +304,8 @@ def main():
                 param.requires_grad = True
             for param in model_fine.parameters():
                 param.requires_grad = True
-            for param in model_env_coarse.parameters():
-                param.requires_grad = True
+            #for param in model_env_coarse.parameters():
+            #    param.requires_grad = True
             for param in model_env_fine.parameters():
                 param.requires_grad = True
             
@@ -321,9 +315,9 @@ def main():
             model_coarse.train()
             model_fine.train()
             if not cfg.dataset.is_rgb:
-                model_env_coarse.train()
+            #    model_env_coarse.train()
                 model_env_fine.train()
-
+        """
 
 
         rgb_coarse, rgb_fine = None, None
@@ -409,7 +403,7 @@ def main():
             intrinsic_target[0,0],
             model_coarse,
             model_fine,
-            model_env_coarse,
+            #model_env_coarse,
             model_env_fine,
             #model_fuse,
             ray_origins,
@@ -431,20 +425,20 @@ def main():
         rgb_coarse, rgb_off_coarse, rgb_fine, rgb_off_fine = nerf_out[0], nerf_out[1], nerf_out[4], nerf_out[5]
         depth_fine_nerf = nerf_out[8]
         depth_fine_nerf_backup = nerf_out[9]
-        alpha_fine = nerf_out[10]
-        normal_fine = nerf_out[11]
+        #alpha_fine = nerf_out[10]
+        #normal_fine = nerf_out[11]
         #print(rgb_fine)
-        albedo_fine = nerf_out[12]
-        roughness_fine = nerf_out[13]
+        #albedo_fine = nerf_out[12]
+        #roughness_fine = nerf_out[13]
         #print(roughness_fine.shape, target_roughness.shape)
         #assert 1==0
 
-        normals_diff_map = nerf_out[14]
-        d_n_map = nerf_out[15]
-        albedo_cost_map = nerf_out[16]
+        #normals_diff_map = nerf_out[14]
+        #d_n_map = nerf_out[15]
+        #albedo_cost_map = nerf_out[16]
         
-        roughness_cost_map = nerf_out[17]
-        normal_cost_map = nerf_out[18]
+        #roughness_cost_map = nerf_out[17]
+        #normal_cost_map = nerf_out[18]
 
 
         #rgb_coarse = torch.mean(rgb_coarse, dim=-1)
@@ -502,12 +496,12 @@ def main():
             fine_loss = torch.nn.functional.mse_loss(
                     rgb_fine, target_ray_values
             )
-            d_normal_loss_gt = torch.nn.functional.mse_loss(
-                d_n_map, target_n
-            )
-            fine_normal_loss_gt = torch.nn.functional.mse_loss(
-                normal_fine, target_n
-            )
+            #d_normal_loss_gt = torch.nn.functional.mse_loss(
+            #    d_n_map, target_n
+            #)
+            #fine_normal_loss_gt = torch.nn.functional.mse_loss(
+            #    normal_fine, target_n
+            #)
             if depth_fine_nerf_backup is not None:
                 fine_nerf_depth_loss_backup = torch.nn.functional.mse_loss(
                     depth_fine_nerf, depth_fine_nerf_backup
@@ -515,6 +509,7 @@ def main():
             fine_nerf_depth_loss_gt = torch.nn.functional.mse_loss(
                 depth_fine_nerf, target_d
             )
+            """
             if roughness is not None:
                 fine_roughness_loss_gt = torch.nn.functional.mse_loss(
                     torch.squeeze(roughness_fine), torch.squeeze(target_roughness)
@@ -523,13 +518,14 @@ def main():
                 fine_albedo_loss_gt = torch.nn.functional.mse_loss(
                     torch.squeeze(albedo_fine), torch.squeeze(target_albedo)
                 )
+            """
             #print(d_n_map.shape, (target_n*(-1.)).shape)
             #assert 1==0
-            fine_normal_loss = normals_diff_map.mean()
+            #fine_normal_loss = normals_diff_map.mean()
 
-            albedo_smoothness_loss = torch.mean(albedo_cost_map)
-            roughness_smoothness_loss = torch.mean(roughness_cost_map)
-            normal_smoothness_loss = torch.mean(normal_cost_map)
+            #albedo_smoothness_loss = torch.mean(albedo_cost_map)
+            #roughness_smoothness_loss = torch.mean(roughness_cost_map)
+            #normal_smoothness_loss = torch.mean(normal_cost_map)
         #print(coarse_loss_off.item(), fine_loss.item(), fine_loss_off.item(), fine_normal_loss.item(), \
         #albedo_smoothness_loss.item(), roughness_smoothness_loss.item(), normal_smoothness_loss.item())
         #print(fine_normal_loss)
@@ -547,39 +543,19 @@ def main():
         loss_off = coarse_loss_off + fine_loss_off
         
         #print(fine_loss.item(), fine_normal_loss.item())
-        loss_on = fine_loss + \
-            cfg.experiment.normal_gt_rate * fine_normal_loss_gt + \
-            cfg.experiment.normal_derived_rate * fine_normal_loss + \
-            cfg.experiment.albedo_rate * albedo_smoothness_loss + \
-            cfg.experiment.roughness_rate * roughness_smoothness_loss + \
-            cfg.experiment.normal_rate * normal_smoothness_loss + \
-            cfg.experiment.rougness_gt_rate * fine_roughness_loss_gt + \
-            cfg.experiment.albedo_gt_rate * fine_albedo_loss_gt
+        loss_on = fine_loss# + \
+            #cfg.experiment.normal_gt_rate * fine_normal_loss_gt + \
+            #cfg.experiment.normal_derived_rate * fine_normal_loss + \
+            #cfg.experiment.albedo_rate * albedo_smoothness_loss + \
+            #cfg.experiment.roughness_rate * roughness_smoothness_loss + \
+            #cfg.experiment.normal_rate * normal_smoothness_loss + \
+            #cfg.experiment.rougness_gt_rate * fine_roughness_loss_gt + \
+            #cfg.experiment.albedo_gt_rate * fine_albedo_loss_gt
 
         loss = cfg.experiment.ir_on_rate * loss_on + \
             cfg.experiment.ir_off_rate * loss_off + \
             cfg.experiment.depth_rate_backup * fine_nerf_depth_loss_backup + \
             cfg.experiment.depth_rate * fine_nerf_depth_loss_gt
-
-
-
-
-        if is_joint and cfg.experiment.grad_norm_rate > 0:
-            grad_params_coarse = torch.autograd.grad(loss, model_coarse.parameters(), create_graph=True)
-            grad_params_fine = torch.autograd.grad(loss, model_fine.parameters(), create_graph=True)
-
-            grad_norm = 0
-            for grad in grad_params_coarse:
-                grad_norm += grad.pow(2).sum()
-            for grad in grad_params_fine:
-                grad_norm += grad.pow(2).sum()
-            
-            grad_norm_loss = grad_norm.sqrt()
-
-            loss += cfg.experiment.grad_norm_rate * grad_norm_loss
-
-
-            
 
 
 
@@ -596,14 +572,6 @@ def main():
             psnr = mse2psnr(fine_loss.item())
         #if no_ir_train == True or jointtrain == True:
         optimizer.step()
-        if is_joint and cfg.experiment.grad_norm_rate > 0:
-            del grad_params_coarse, grad_params_fine, grad_norm_loss, grad_norm
-
-        #if no_ir_train == False:
-
-        #optimizer_env.step()
-
-
 
         # Learning rate updates
         num_decay_steps = cfg.scheduler.lr_decay * 1000
@@ -630,9 +598,9 @@ def main():
         writer.add_scalar("train/fine_loss_off", fine_loss_off.item(), i)
         if not cfg.dataset.is_rgb:
             writer.add_scalar("train/fine_loss", fine_loss.item(), i)
-            writer.add_scalar("train/fine_normal_diff_loss", fine_normal_loss.item(), i)
-            writer.add_scalar("train/fine_normal_loss_gt", fine_normal_loss_gt.item(), i)
-            writer.add_scalar("train/d_normal_loss_gt", d_normal_loss_gt.item(), i)
+            #writer.add_scalar("train/fine_normal_diff_loss", fine_normal_loss.item(), i)
+            #writer.add_scalar("train/fine_normal_loss_gt", fine_normal_loss_gt.item(), i)
+            #writer.add_scalar("train/d_normal_loss_gt", d_normal_loss_gt.item(), i)
             writer.add_scalar("train/depth_loss", fine_nerf_depth_loss_gt.item(), i)
             if depth_fine_nerf_backup is not None:
                 writer.add_scalar("train/depth_loss_backup", fine_nerf_depth_loss_backup.item(), i)
@@ -652,7 +620,7 @@ def main():
             model_fine.eval()
             #model_fuse.eval()
             if not cfg.dataset.is_rgb:
-                model_env_coarse.eval()
+            #    model_env_coarse.eval()
                 model_env_fine.eval()
 
             mean_nerf_abs_err = 0
@@ -698,7 +666,7 @@ def main():
                         intrinsic_target[0,0],
                         model_coarse,
                         model_fine,
-                        model_env_coarse,
+                    #    model_env_coarse,
                         model_env_fine,
                         #model_fuse,
                         ray_origins,
@@ -719,9 +687,9 @@ def main():
                     #print(rgb_coarse_off[135,240,:])
 
                     depth_fine_nerf = nerf_out[8]
-                    normal_fine, albedo_fine, roughness_fine = nerf_out[11], nerf_out[12], nerf_out[13]
+                    #normal_fine, albedo_fine, roughness_fine = nerf_out[11], nerf_out[12], nerf_out[13]
                     #normals_diff_map = nerf_out[13]
-                    depth_fine_dex = list(nerf_out[19:])
+                    depth_fine_dex = list(nerf_out[10:])
                     target_ray_values = img_target.unsqueeze(-1)
                     target_ray_values_off = img_off_target.unsqueeze(-1)
 
@@ -872,9 +840,11 @@ def main():
             mean_dex_err4 = mean_dex_err4/len(i_val)
             mean_dex_obj_err = mean_dex_obj_err/len(i_val)
 
-                    
+            
+
             if rgb_fine_off is not None:
                 if not cfg.dataset.is_rgb:
+                    """
                     normal_fine = normal_fine.permute(2,0,1)
                     normal_fine = (normal_fine.clone().detach()*0.5+0.5)
                     normal_target = normal_target.permute(2,0,1)
@@ -893,14 +863,16 @@ def main():
                     writer.add_image(
                         test_mode+"/normal_gt", vutils.make_grid(normal_target, padding=0, nrow=1), i
                     )
+                    """
                     ir_light = model_env_fine.ir_pattern.clone().detach()
                     ir_light_out = torch.nn.functional.softplus(ir_light, beta=5)
                     #print(ir_light.shape)
                     #assert 1==0
+                
                     writer.add_image(
                         test_mode+"/ir_light", vutils.make_grid(ir_light_out, padding=0, nrow=1, normalize=True), i
                     )
-                    
+                 
                     writer.add_image(
                         test_mode+"/rgb_fine", vutils.make_grid(rgb_fine[...,0], padding=0, nrow=1), i
                     )
@@ -910,6 +882,7 @@ def main():
                     writer.add_image(
                         test_mode+"/rgb_coarse_off", vutils.make_grid(rgb_coarse_off[...,0], padding=0, nrow=1), i
                     )
+
                 else:
                     writer.add_image(
                         test_mode+"/rgb_fine_off", vutils.make_grid(rgb_fine_off[...,:].permute(2,0,1), padding=0, nrow=1), i
@@ -1056,7 +1029,7 @@ def main():
                     "iter": i,
                     "model_coarse_state_dict": model_coarse.state_dict(),
                     "model_fine_state_dict": model_fine.state_dict(),
-                    "model_env_coarse_state_dict": model_env_coarse.state_dict(),
+                #    "model_env_coarse_state_dict": model_env_coarse.state_dict(),
                     "model_env_fine_state_dict": model_env_fine.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "loss": loss,

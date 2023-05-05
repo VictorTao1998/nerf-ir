@@ -7,9 +7,9 @@ experiment:
   # Seed for random number generators (for repeatability).
   randomseed: 11 #42  # Cause, why not?
   # Number of training iterations.
-  train_iters: 300000
-  finetune_start: 100000
-  jointtrain_start: 100000
+  train_iters: 150000
+  finetune_start: 50000
+  jointtrain_start: 50000
   # Number of training iterations after which to validate.
   validate_every: 1000
   # Number of training iterations after which to checkpoint.
@@ -18,14 +18,14 @@ experiment:
   print_every: 1000
 
   swap_every: 30000
-  joint_start: 280000
+  joint_start: 130000
 
   normal_gt_rate: 0
   rougness_gt_rate: 0
   albedo_gt_rate: 0
   depth_rate: 0
 
-  depth_rate_backup: 1
+  depth_rate_backup: 0
   
   normal_derived_rate: 0.1
 
