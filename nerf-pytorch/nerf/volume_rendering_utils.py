@@ -248,7 +248,22 @@ def volume_render_radiance_field_ir_env(
     
     #print(torch.sum(torch.isnan(weights)), torch.sum(torch.isnan(env_rgb)), torch.sum(torch.isnan(env_rgb_map)))
     #print(depth_values[0,:])
+    #depth_weight = weights
+    #depth_weight_pool = F.max_pool1d(depth_weight,depth_weight.shape[-1])
+    #depth_weight_f = F.softmax(F.relu(depth_weight+1e-6 - depth_weight_pool), dim=-1)
+    #depth_weight_f_pool = F.max_pool1d(depth_weight_f,depth_weight.shape[-1])
+    #depth_weight_f2 = depth_weight_f/depth_weight_f_pool
+    '''
+    print(depth_weight[500,-1].item(),
+    depth_weight_pool[500,0].item(),
+    depth_weight_f2[500,-1].item(),
+    (depth_weight+1e-6 - depth_weight_pool)[500,-1].item(),
+    (depth_weight[500,-1]+1e-6 - depth_weight_pool[500,0]).item()
+    )
+    assert 1==0
+    '''
     depth_map = weights * depth_values
+    #depth_map = depth_weight_f2 * depth_values
 
     #######################################################################
     depth_map_backup = None
@@ -277,6 +292,8 @@ def volume_render_radiance_field_ir_env(
         depth_map_dex.append(depth_values[n_ind, depth_ind])
     
     depth_map = depth_map.sum(dim=-1)
+    #print(torch.max(depth_map))
+    
     #print(depth_values.shape, sigma_a.shape, depth_ind.shape, depth_map.shape, depth_map_dex.shape)
     # depth_map = (weights * depth_values).sum(dim=-1)
     #print(weights.shape)
@@ -356,7 +373,17 @@ def volume_render_radiance_field_ir_env(
         if mode == "test":
             torch.save(weights.cpu(), os.path.join(logdir, "weights.pt"))
             torch.save(depth_values.cpu(), os.path.join(logdir, "depth_values.pt"))
-        #    torch.save(radiance_field[..., color_channel].cpu(), os.path.join(logdir, "occu.pt"))
+            torch.save(radiance_field.cpu(), os.path.join(logdir, "occu.pt"))
+            torch.save(dists.cpu(), os.path.join(logdir, "dists.pt"))
+            max_idx = torch.max(weights,dim=-1).indices # bs x 1
+            depth_map_max = depth_values[list(range(depth_values.shape[0])),max_idx]
+            torch.save(depth_map.cpu(), os.path.join(logdir, "depth_map.pt"))
+            torch.save(depth_map_max.cpu(), os.path.join(logdir, "depth_map_max.pt"))
+
+            #assert 1==0
+
+        #assert 1==0
+            
         #    torch.save(albedo_map.cpu(), os.path.join(logdir, "albedo_map.pt"))
         #    torch.save(roughness_map.cpu(), os.path.join(logdir, "roughness_map.pt"))
 

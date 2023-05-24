@@ -13,6 +13,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm, trange
 import torchvision.utils as vutils
 from PIL import Image
+import open3d as o3d
 
 from nerf import compute_err_metric, depth_error_img, compute_obj_err
 
@@ -22,7 +23,7 @@ from nerf import (CfgNode, get_embedding_function, get_ray_bundle, img2mse,
 
 
 def main():
-
+    test_mode = "test"
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--config", type=str, required=True, help="Path to (.yml) config file."
@@ -61,15 +62,16 @@ def main():
 
     # Load dataset
     images, poses, render_poses, hwf = None, None, None, None
-
-    images, poses, ir_poses, render_poses, hwf, i_split, intrinsics, depths, labels, imgs_off, normals = load_messytable_data(
+    print(configargs.sceneid)
+    images, poses, ir_poses, render_poses, hwf, i_split, intrinsics, depths, labels, imgs_off, normals, roughness, albedo = load_messytable_data(
         cfg.dataset.basedir,
         half_res=cfg.dataset.half_res,
         debug = False,
         testskip=cfg.dataset.testskip,
         cfg=cfg,
-        is_real_rgb=cfg.dataset.is_real_rgb,
-        sceneid = configargs.sceneid
+        is_rgb=cfg.dataset.is_rgb,
+        sceneid = configargs.sceneid,
+        gt_brdf = False
     )
     #print(images.shape, i_split)
     #assert 1==0
@@ -121,6 +123,7 @@ def main():
     ir_intrinsic = intrinsics[0,:,:].to(device)
     ir_intrinsic[:2,2] = ir_intrinsic[:2,2] * 2.
     ir_extrinsic = ir_poses[0,:,:].to(device)
+    '''
     model_env_coarse = getattr(models, cfg.models.env.type)(
         num_layers=cfg.models.env.num_layers,
         hidden_size=cfg.models.env.hidden_size,
@@ -137,13 +140,14 @@ def main():
         ir_extrinsic=ir_extrinsic
     )
     model_env_coarse.to(device)
+    '''
     model_env_fine = getattr(models, cfg.models.env.type)(
-        num_layers=cfg.models.env.num_layers,
-        hidden_size=cfg.models.env.hidden_size,
-        skip_connect_every=cfg.models.env.skip_connect_every,
-        num_encoding_fn_xyz=cfg.models.env.num_encoding_fn_xyz,
+        #num_layers=cfg.models.env.num_layers,
+        #hidden_size=cfg.models.env.hidden_size,
+        #skip_connect_every=cfg.models.env.skip_connect_every,
+        #num_encoding_fn_xyz=cfg.models.env.num_encoding_fn_xyz,
         #num_encoding_fn_dir=cfg.models.env.num_encoding_fn_dir,
-        include_input_xyz=cfg.models.env.include_input_xyz,
+        #include_input_xyz=cfg.models.env.include_input_xyz,
         #include_input_dir=cfg.models.env.include_input_dir,
         #use_viewdirs=cfg.models.env.use_viewdirs,
         color_channel=1,
@@ -176,7 +180,7 @@ def main():
     # Initialize optimizer.
     trainable_parameters = list(model_coarse.parameters())
     #trainable_parameters_env = list(model_env_coarse.parameters())
-    trainable_parameters += list(model_env_coarse.parameters())
+    #trainable_parameters += list(model_env_coarse.parameters())
 
     trainable_parameters += list(model_fine.parameters())
     #trainable_parameters_env += list(model_env_fine.parameters())
@@ -196,7 +200,13 @@ def main():
     m_thres_max = cfg.nerf.validation.m_thres
     m_thres_cand = np.arange(5,m_thres_max+5,5)
     os.makedirs(os.path.join(logdir,"pred_depth_dex"), exist_ok=True)
+    os.makedirs(os.path.join(logdir,"pred_depth_err_dex"), exist_ok=True)
     os.makedirs(os.path.join(logdir,"pred_depth_nerf"), exist_ok=True)
+    os.makedirs(os.path.join(logdir,"pred_depth_err_nerf"), exist_ok=True)
+    os.makedirs(os.path.join(logdir,"pred_nerf"), exist_ok=True)
+    os.makedirs(os.path.join(logdir,"pred_nerf_gt"), exist_ok=True)
+    os.makedirs(os.path.join(logdir,"pred_depth_pcd_nerf"), exist_ok=True)
+    os.makedirs(os.path.join(logdir,"pred_depth_pcd_nerf_gt"), exist_ok=True)
 
     writer = SummaryWriter(logdir)
     # Write out config parameters.
@@ -211,17 +221,24 @@ def main():
         checkpoint = torch.load(configargs.load_checkpoint)
         model_coarse.load_state_dict(checkpoint["model_coarse_state_dict"])
         model_fine.load_state_dict(checkpoint["model_fine_state_dict"])
-        model_env_coarse.load_state_dict(checkpoint["model_env_coarse_state_dict"])
+        #model_env_coarse.load_state_dict(checkpoint["model_env_coarse_state_dict"])
         model_env_fine.load_state_dict(checkpoint["model_env_fine_state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         start_iter = checkpoint["iter"]
 
+    img_idx = i_val[0]
     i = 0
+    mean_nerf_abs_err = 0
+    mean_nerf_err4 = 0
+    mean_nerf_obj_err = 0
+    mean_dex_abs_err = 0
+    mean_dex_err4 = 0
+    mean_dex_obj_err = 0
     with torch.no_grad():
         rgb_coarse, rgb_fine = None, None
         target_ray_values = None
 
-        img_idx = np.random.choice(i_val)
+        #img_idx = np.random.choice(i_val)
         img_target = images[img_idx].to(device)
         pose_target = poses[img_idx, :, :].to(device)
         depth_target = depths[img_idx].to(device)
@@ -247,11 +264,11 @@ def main():
         
         #assert 1==0
         #rgb_coarse, _, _, rgb_fine, _, _ ,depth_fine_dex
-        albedo_edit = torch.load('/code/test/brdf_map/new_albedo_map.pt').cuda()
-        roughness_edit = torch.load('/code/test/brdf_map/new_roughness_map.pt').cuda()
-        print(normal_target.shape)
-        assert 1==0
-        normal_edit = F.normalize(normal_target.view([129600, 3]), p=2, dim=-1)
+        #albedo_edit = torch.load('/code/test/brdf_map/new_albedo_map.pt').cuda()
+        #roughness_edit = torch.load('/code/test/brdf_map/new_roughness_map.pt').cuda()
+        #print(normal_target.shape)
+        #assert 1==0
+        #normal_edit = F.normalize(normal_target.view([129600, 3]), p=2, dim=-1)
 
         #print(torch.norm(normal_edit, dim=-1))
         #assert 1==0
@@ -262,7 +279,7 @@ def main():
             intrinsic_target[0,0],
             model_coarse,
             model_fine,
-            model_env_coarse,
+            #model_env_coarse,
             model_env_fine,
             #model_fuse,
             ray_origins,
@@ -275,19 +292,19 @@ def main():
             encode_direction_fn=encode_direction_fn,
             m_thres_cand=m_thres_cand,
             idx = coords,
-            albedo_edit=albedo_edit,
-            roughness_edit=roughness_edit,
-            normal_edit=normal_edit,
+            #albedo_edit=albedo_edit,
+            #roughness_edit=roughness_edit,
+            #normal_edit=normal_edit,
             logdir=logdir,
             light_extrinsic=ir_extrinsic_target
         )
         rgb_coarse, rgb_coarse_off, rgb_fine, rgb_fine_off = nerf_out[0], nerf_out[1], nerf_out[4], nerf_out[5]
         depth_fine_nerf = nerf_out[8]
-        normal_fine, albedo_fine, roughness_fine = nerf_out[10], nerf_out[11], nerf_out[12]
+        #normal_fine, albedo_fine, roughness_fine = nerf_out[10], nerf_out[11], nerf_out[12]
         #print(albedo_fine.shape)
         #assert 1==0
         #normals_diff_map = nerf_out[13]
-        depth_fine_dex = list(nerf_out[18:])
+        depth_fine_dex = list(nerf_out[11:])
         target_ray_values = img_target.unsqueeze(-1)
 
         coarse_loss = 0.#img2mse(rgb_coarse, target_ray_values)
@@ -313,11 +330,11 @@ def main():
             "validation/rgb_coarse_off", vutils.make_grid(rgb_coarse_off[...,0], padding=0, nrow=1), i
         )
         if rgb_fine is not None:
-            normal_fine = normal_fine.permute(2,0,1)
-            normal_fine = (normal_fine.clone().detach()*0.5+0.5)
-            normal_target = normal_target.permute(2,0,1)
-            normal_target = (normal_target.clone().detach()*0.5+0.5)
-            
+            #normal_fine = normal_fine.permute(2,0,1)
+            #normal_fine = (normal_fine.clone().detach()*0.5+0.5)
+            #normal_target = normal_target.permute(2,0,1)
+            #normal_target = (normal_target.clone().detach()*0.5+0.5)
+            '''
             #print(torch.max(albedo_fine), torch.min(albedo_fine), torch.max(roughness_fine), torch.min(roughness_fine))
             writer.add_image(
                 "validation/normal_fine", vutils.make_grid(normal_fine, padding=0, nrow=1), i
@@ -331,6 +348,7 @@ def main():
             writer.add_image(
                 "validation/normal_gt", vutils.make_grid(normal_target, padding=0, nrow=1), i
             )
+            '''
             ir_light = model_env_fine.ir_pattern.clone().detach()
             ir_light_out = torch.nn.functional.softplus(ir_light, beta=5)
             #print(ir_light.shape)
@@ -367,14 +385,111 @@ def main():
         min_abs_depth = None
         min_cand = 0
 
+        for cand in range(m_thres_cand.shape[0]):
+        
+            pred_depth_torch = depth_fine_dex[cand].detach().cpu()
+
+            err = compute_err_metric(gt_depth_torch, pred_depth_torch, img_ground_mask)
+            obj_depth_err_dex, obj_depth_4_err_dex, obj_count_dex = compute_obj_err(gt_depth_torch, pred_depth_torch, label_target.detach().cpu(), img_ground_mask)
+            if obj_depth_err_dex.mean() < min_abs_err:
+                min_abs_err = obj_depth_err_dex.mean()
+                min_err = err
+                min_abs_depth = pred_depth_torch
+                min_cand = m_thres_cand[cand]
+
         pred_depth_nerf = depth_fine_nerf.detach().cpu()
         nerf_err = compute_err_metric(gt_depth_torch, pred_depth_nerf, img_ground_mask)
+
+        total_obj_depth_err_dex, total_obj_depth_4_err_dex, total_obj_count_dex = compute_obj_err(gt_depth_torch, min_abs_depth, label_target.detach().cpu(), img_ground_mask)
+        total_obj_depth_err_nerf, total_obj_depth_4_err_nerf, total_obj_count_nerf = compute_obj_err(gt_depth_torch, pred_depth_nerf, label_target.detach().cpu(), img_ground_mask)
+
+        mean_nerf_abs_err += nerf_err['depth_abs_err']
+        mean_nerf_err4 += nerf_err['depth_err4']
+        mean_nerf_obj_err += total_obj_depth_err_nerf
+
+        mean_dex_abs_err += min_err['depth_abs_err']
+        mean_dex_err4 += min_err['depth_err4']
+        mean_dex_obj_err += total_obj_depth_err_dex
+
+        rgb_fine_np = rgb_fine.cpu().numpy()[:,:,0]
+        img_target_np = img_target.cpu().numpy()
+
+        rgb_fine_np = (rgb_fine_np*255).astype(np.uint8)
+        img_target_np = (img_target_np*255).astype(np.uint8)
+
+        rgb_fine_np_img = Image.fromarray(rgb_fine_np, mode='L')
+        img_target_np_img = Image.fromarray(img_target_np, mode='L')
         pred_depth_nerf_np = pred_depth_nerf.numpy()
+        depth_np_gt = depth_target.cpu().numpy()
+
+        rgb_fine_np_img.save(os.path.join(logdir,"pred_nerf",test_mode+"_pred_nerf_step_"+str(i)+ "_" + str(img_idx) + ".png"))
+        img_target_np_img.save(os.path.join(logdir,"pred_nerf_gt",test_mode+"_pred_nerf_gt_step_"+str(i)+ "_" + str(img_idx) + ".png"))
+        #print(np.max(rgb_fine_np), np.min(rgb_fine_np), np.max(img_target_np), np.min(img_target_np))
+        
+        #assert 1==0
+    
+        
+        depth_pts = depth2pts_np(pred_depth_nerf_np, intrinsic_target.cpu().numpy(), pose_target.cpu().numpy())
+        pts_o3d = o3d.utility.Vector3dVector(depth_pts)
+        pcd = o3d.geometry.PointCloud(pts_o3d)
+        o3d.io.write_point_cloud(os.path.join(logdir,"pred_depth_pcd_nerf",test_mode+"_pred_depth_pcd_step_"+str(i)+ "_" + str(img_idx) + ".ply"), pcd)
+
+        
+        depth_pts = depth2pts_np(depth_np_gt, intrinsic_target.cpu().numpy(), pose_target.cpu().numpy())
+        pts_o3d = o3d.utility.Vector3dVector(depth_pts)
+        pcd = o3d.geometry.PointCloud(pts_o3d)
+        o3d.io.write_point_cloud(os.path.join(logdir,"pred_depth_pcd_nerf_gt",test_mode+"_gt_depth_pcd_step_"+str(i)+ "_" + str(img_idx) + ".ply"), pcd)
+
+
+        #print(pred_depth_nerf.shape, depth_target.shape)
+        #assert 1==0
+
+
         pred_depth_nerf_np = pred_depth_nerf_np*1000
         pred_depth_nerf_np = (pred_depth_nerf_np).astype(np.uint32)
         out_pred_depth_nerf = Image.fromarray(pred_depth_nerf_np, mode='I')
-        out_pred_depth_nerf.save(os.path.join(logdir,"pred_depth_nerf","pred_depth_step_"+str(i)+".png"))
+        out_pred_depth_nerf.save(os.path.join(logdir,"pred_depth_nerf",test_mode+"_pred_depth_step_"+str(i)+ "_" + str(img_idx) + ".png"))
         pred_depth_nerf_err_np = depth_error_img((pred_depth_nerf.unsqueeze(0))*1000, (gt_depth_torch.unsqueeze(0))*1000, img_ground_mask.unsqueeze(0))
+        pred_depth_nerf_err_np_img = (pred_depth_nerf_err_np*255).astype(np.uint8)
+        pred_depth_nerf_err_np_img = Image.fromarray(pred_depth_nerf_err_np_img, mode='RGB')
+        pred_depth_nerf_err_np_img.save(os.path.join(logdir,"pred_depth_err_nerf",test_mode+"_pred_depth_err_step_"+str(i)+ "_" + str(img_idx) + ".png"))
+        with open(os.path.join(logdir,"pred_depth_err_nerf", test_mode+"_output_result.txt"), "a") as f:
+            f.write("iter: "
+            + str(i)
+            + " img_idx: "
+            + str(img_idx)
+            + " Nerf Abs Err: "
+            + str(nerf_err['depth_abs_err'])
+            + " Nerf Err4: "
+            + str(nerf_err['depth_err4'])
+            + " Nerf Obj Err: "
+            + str(total_obj_depth_err_nerf)
+            + "\n"
+            )
+
+        pred_depth_np = min_abs_depth.numpy()
+        pred_depth_np = pred_depth_np*1000
+        pred_depth_np = (pred_depth_np).astype(np.uint32)
+        out_pred_depth = Image.fromarray(pred_depth_np, mode='I')
+        out_pred_depth.save(os.path.join(logdir,"pred_depth_dex",test_mode+"_pred_depth_step_"+str(i)+ "_" + str(img_idx) + ".png"))
+        pred_depth_err_np = depth_error_img((min_abs_depth.unsqueeze(0))*1000, (gt_depth_torch.unsqueeze(0))*1000, img_ground_mask.unsqueeze(0))
+        pred_depth_err_np_img = (pred_depth_err_np*255).astype(np.uint8)
+        pred_depth_err_np_img = Image.fromarray(pred_depth_err_np_img, mode='RGB')
+        pred_depth_err_np_img.save(os.path.join(logdir,"pred_depth_err_dex",test_mode+"_pred_depth_err_step_"+str(i)+ "_" + str(img_idx) + ".png"))
+        with open(os.path.join(logdir,"pred_depth_err_dex", test_mode+"_output_result.txt"), "a") as f:
+            f.write("iter: "
+            + str(i)
+            + " img_idx: "
+            + str(img_idx)
+            + " Dex Abs Err: "
+            + str(min_err['depth_abs_err'])
+            + " Dex Err4: "
+            + str(min_err['depth_err4'])
+            + " Dex Obj Err: "
+            + str(total_obj_depth_err_dex)
+            + "\n"
+            )
+
         writer.add_image(
                 "validation/depth_pred_nerf_err",
                 pred_depth_nerf_err_np.transpose((2,0,1)),
@@ -385,50 +500,18 @@ def main():
                 vutils.make_grid(pred_depth_nerf, padding=0, nrow=1, normalize=True, scale_each=True),
                 i,
             )
-
-        for cand in range(m_thres_cand.shape[0]):
-            #print(m_thres_cand[cand], obj_depth_err_dex.mean())
-
-        
-            pred_depth_torch = depth_fine_dex[cand].detach().cpu()
-            
-            #print(gt_depth_torch.shape, pred_depth_torch.shape, img_ground_mask.shape)
-            #assert 1==0
-            err = compute_err_metric(gt_depth_torch, pred_depth_torch, img_ground_mask)
-            obj_depth_err_dex, obj_depth_4_err_dex, obj_count_dex = compute_obj_err(gt_depth_torch, pred_depth_torch, label_target.detach().cpu(), img_ground_mask)
-            if obj_depth_err_dex.mean() < min_abs_err:
-                min_abs_err = obj_depth_err_dex.mean()
-                min_err = err
-                min_abs_depth = pred_depth_torch
-                min_cand = m_thres_cand[cand]
-        #print(type(min_abs_depth), min_abs_depth.shape)
         writer.add_image(
                 "validation/depth_pred_dex",
                 vutils.make_grid(min_abs_depth, padding=0, nrow=1, normalize=True, scale_each=True),
                 i,
             )
         
-
-        total_obj_depth_err_dex, total_obj_depth_4_err_dex, total_obj_count_dex = compute_obj_err(gt_depth_torch, min_abs_depth, label_target.detach().cpu(), img_ground_mask)
-        total_obj_depth_err_nerf, total_obj_depth_4_err_nerf, total_obj_count_nerf = compute_obj_err(gt_depth_torch, pred_depth_nerf, label_target.detach().cpu(), img_ground_mask)
-        #print(total_obj_depth_err, total_obj_depth_4_err, total_obj_count)
-        #assert 1==0
-            
-        pred_depth_np = min_abs_depth.numpy()
-        pred_depth_np = pred_depth_np*1000
-        pred_depth_np = (pred_depth_np).astype(np.uint32)
-        out_pred_depth = Image.fromarray(pred_depth_np, mode='I')
-        out_pred_depth.save(os.path.join(logdir,"pred_depth_dex","pred_depth_step_"+str(i)+".png"))
-
-        pred_depth_err_np = depth_error_img((min_abs_depth.unsqueeze(0))*1000, (gt_depth_torch.unsqueeze(0))*1000, img_ground_mask.unsqueeze(0))
         #print(pred_depth_err_np.transpose((1,2,0)).shape)
         writer.add_image(
                 "validation/depth_pred_err",
                 pred_depth_err_np.transpose((2,0,1)),
                 i,
             )
-
-
             #print(depth_fine_dex[cand].shape)
         writer.add_image(
             "validation/depth_gt",
@@ -441,7 +524,7 @@ def main():
             + " Validation PSNR: "
             + str(psnr)
             + " Dex Abs Err: "
-            + str(min_abs_err)
+            + str(min_err['depth_abs_err'])
             + " Dex Err4: "
             + str(min_err['depth_err4'])
             + " Nerf Abs Err: "
@@ -455,7 +538,7 @@ def main():
             + " Best Thres: "
             + str(min_cand)
         )
-        with open(os.path.join(logdir, "output_result.yml"), "a") as f:
+        with open(os.path.join(logdir, "output_result.txt"), "a") as f:
             f.write("iter: "
             + str(i)
             + " Validation loss: "
@@ -476,6 +559,42 @@ def main():
             + str(total_obj_depth_err_nerf)
             + "\n"
             )
+
+def cast_to_image(tensor, color_channel=3):
+    #print(tensor.shape)
+    # Input tensor is (H, W, 3). Convert to (3, H, W).
+    tensor = tensor.permute(2, 0, 1)
+    # Conver to PIL Image and then np.array (output shape: (H, W, 3))
+    img = np.array(torchvision.transforms.ToPILImage()(tensor.detach().cpu()))
+    # Map back to shape (3, H, W), as tensorboard needs channels first.
+    img = np.moveaxis(img, [-1], [0])
+    #print(img.shape)
+    return img
+
+def depth2pts_np(depth_map, cam_intrinsic, cam_extrinsic=np.eye(4)):
+    feature_grid = get_pixel_grids_np(depth_map.shape[0], depth_map.shape[1])
+
+    uv = np.matmul(np.linalg.inv(cam_intrinsic), feature_grid)
+    cam_points = uv * np.reshape(depth_map, (1, -1))
+
+    R = cam_extrinsic[:3, :3]
+    t = cam_extrinsic[:3, 3:4]
+    R_inv = np.linalg.inv(R)
+
+    world_points = np.matmul(R_inv, cam_points - t).transpose()
+    return world_points
+
+
+def get_pixel_grids_np(height, width):
+    x_linspace = np.linspace(0.5, width - 0.5, width)
+    y_linspace = np.linspace(0.5, height - 0.5, height)
+    x_coordinates, y_coordinates = np.meshgrid(x_linspace, y_linspace)
+    x_coordinates = np.reshape(x_coordinates, (1, -1))
+    y_coordinates = np.reshape(y_coordinates, (1, -1))
+    ones = np.ones_like(x_coordinates).astype(float)
+    grid = np.concatenate([x_coordinates, y_coordinates, ones], axis=0)
+
+    return grid
 
 if __name__ == "__main__":
     main()

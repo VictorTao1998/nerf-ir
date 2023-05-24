@@ -714,6 +714,9 @@ def predict_and_render_radiance_ir(
         #print(z_vals[0,:])
         rgb_fine, rgb_off_fine, disp_fine, acc_fine = fine_out[0], fine_out[1], fine_out[2], fine_out[3]
         #normal_fine, albedo_fine, roughness_fine = fine_out[8], fine_out[9], fine_out[10]
+        weights_fine = fine_out[4]
+        #print(weights_fine.shape)
+        #assert 1==0
         depth_fine_nerf = fine_out[5]
         depth_fine_nerf_backup = fine_out[6]
         #alpha_fine = fine_out[7]
@@ -730,7 +733,7 @@ def predict_and_render_radiance_ir(
     #print(alpha_fine.shape)
     #assert 1==0
     out = [rgb_coarse, rgb_off_coarse, disp_coarse, acc_coarse, \
-        rgb_fine, rgb_off_fine, disp_fine, acc_fine, depth_fine_nerf, depth_fine_nerf_backup, \
+        rgb_fine, rgb_off_fine, disp_fine, acc_fine, depth_fine_nerf, depth_fine_nerf_backup, weights_fine\
         #alpha_fine, normal_fine, albedo_fine, roughness_fine, normals_diff_map, 
         #d_n_map, albedo_cost_map, roughness_cost_map, normal_cost_map
         ] + depth_fine_dex
@@ -1039,6 +1042,7 @@ def run_one_iter_of_nerf_ir(
         restore_shapes += restore_shapes
         restore_shapes += [ray_directions.shape[:-1]] # depth_fine
         restore_shapes += [ray_directions.shape[:-1]] # depth_fine_backup
+        restore_shapes += [torch.Size([270,480,128])] # weights
         #print(out_shape)
         #assert 1==0
         #print(ray_directions.shape)

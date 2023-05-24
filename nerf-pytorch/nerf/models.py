@@ -210,6 +210,7 @@ class FlexibleNeRFModel(torch.nn.Module):
             self.dim_dir = 0
 
         self.layer1 = torch.nn.Linear(self.dim_xyz, hidden_size)
+        #torch.nn.init.zeros_(self.layer1.weight)
         self.layers_xyz = torch.nn.ModuleList()
         for i in range(num_layers - 1):
             if i % self.skip_connect_every == 0 and i > 0 and i != num_layers - 1:

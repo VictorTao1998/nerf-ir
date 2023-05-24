@@ -23,6 +23,14 @@ from nerf import (CfgNode, get_embedding_function, get_ray_bundle, img2mse,
 
 debug_output = False
 
+def init_weights(m):
+    if isinstance(m, torch.nn.Linear):
+        m.weight = torch.nn.Parameter(m.weight.clone().detach(),requires_grad=True)
+        m.bias = torch.nn.Parameter(m.bias.clone().detach(),requires_grad=True)
+        #torch.nn.init.zeros_(m.weight)
+        #torch.nn.init.zeros_(m.bias)
+        #m.bias.data.fill_(0.0)
+
 def main():
 
     parser = argparse.ArgumentParser()
@@ -152,7 +160,7 @@ def main():
         model_env_fine.to(device)
 
 
-
+    
 
     # If a fine-resolution model is specified, initialize it.
     model_fine = None
@@ -169,7 +177,18 @@ def main():
             color_channel=color_ch
         )
         model_fine.to(device)
+    #print(torch.max(model_fine.layers_xyz[1].weight))
 
+    
+    #model_coarse.apply(init_weights)
+    #model_fine.apply(init_weights)
+    #print(torch.max(model_fine.layers_xyz[1].weight))
+    #print(model_fine.layers_xyz[1].weight)
+    #print(list(model_coarse.parameters()))
+
+    #assert 1==0
+    #print(model_coarse)
+    #assert 1==0
     # Initialize optimizer.
     trainable_parameters = list(model_coarse.parameters())
     #trainable_parameters_env = list(model_env_coarse.parameters())
@@ -251,12 +270,14 @@ def main():
                 param.requires_grad = False
 
         if i == cfg.experiment.joint_start:            
-            model_env_fine.ir_pattern.requires_grad = False
-            model_env_fine.static_ir_pat = True
+            #model_env_fine.ir_pattern.requires_grad = False
+            #model_env_fine.static_ir_pat = True
             model_coarse.train()
             model_fine.train()
             if not cfg.dataset.is_rgb:
                 model_env_fine.train()
+        
+
 
         
         """
@@ -417,14 +438,18 @@ def main():
             m_thres_cand=m_thres_cand,
             idx=select_inds,
             joint=is_joint,
+            logdir=logdir,
             light_extrinsic=ir_extrinsic_target,
             is_rgb=cfg.dataset.is_rgb,
-            model_backup=model_backup,
+            model_backup=model_backup
             #gt_normal=target_n
         )
+        
         rgb_coarse, rgb_off_coarse, rgb_fine, rgb_off_fine = nerf_out[0], nerf_out[1], nerf_out[4], nerf_out[5]
         depth_fine_nerf = nerf_out[8]
         depth_fine_nerf_backup = nerf_out[9]
+        weights_fine = nerf_out[10] # bs x 128
+        
         #alpha_fine = nerf_out[10]
         #normal_fine = nerf_out[11]
         #print(rgb_fine)
@@ -470,6 +495,8 @@ def main():
             torch.squeeze(rgb_off_fine), torch.squeeze(target_ray_values_off)
         )
 
+        
+
         fine_loss = 0
         d_normal_loss_gt = 0
         fine_normal_loss_gt = 0
@@ -482,15 +509,14 @@ def main():
         fine_roughness_loss_gt = 0
         fine_albedo_loss_gt = 0
 
-        """
-        if not torch.all(~torch.isnan(rgb_off_fine)):
-            print("nan output rgbofffine")
-            return
+        weights_cons_loss = 0
 
-        if not torch.all(~torch.isnan(rgb_fine)):
-            print("nan output rgbfine")
-            return
-        """
+        #print(weights_fine.shape)
+        if is_joint and (i % cfg.experiment.swap_every) < (cfg.experiment.swap_every/2):
+            #print("err")
+            weights_cons_loss = shennon_entropy(weights_fine)
+            #print(weights_cons_loss)
+        #assert 1==0
         
         if not cfg.dataset.is_rgb:
             fine_loss = torch.nn.functional.mse_loss(
@@ -506,8 +532,10 @@ def main():
                 fine_nerf_depth_loss_backup = torch.nn.functional.mse_loss(
                     depth_fine_nerf, depth_fine_nerf_backup
                 )
+
+            depth_valid_mask = torch.logical_and(target_d > 0, target_d < 2.5)
             fine_nerf_depth_loss_gt = torch.nn.functional.mse_loss(
-                depth_fine_nerf, target_d
+                depth_fine_nerf[depth_valid_mask], target_d[depth_valid_mask]
             )
             """
             if roughness is not None:
@@ -555,23 +583,37 @@ def main():
         loss = cfg.experiment.ir_on_rate * loss_on + \
             cfg.experiment.ir_off_rate * loss_off + \
             cfg.experiment.depth_rate_backup * fine_nerf_depth_loss_backup + \
-            cfg.experiment.depth_rate * fine_nerf_depth_loss_gt
+            cfg.experiment.depth_rate * fine_nerf_depth_loss_gt + \
+            cfg.experiment.weight_constraint_rate * weights_cons_loss
 
-
+        #print(loss.item())
 
         optimizer.zero_grad()
 
         #optimizer_env.zero_grad()
         #loss.backward()
         #loss_off.backward()
+        #a = list(model_fine.parameters())[0].clone().detach()
         
         loss.backward()
+
+        #if torch.sum(list(model_fine.parameters())[0].grad) != 0:
+        #    print(list(model_fine.parameters())[0].grad)
+        #else:
+        #    print(list(model_fine.parameters())[0].grad)
+        #    #print(loss.item())
+        #    assert 1==0
+
         if cfg.dataset.is_rgb:
             psnr = mse2psnr(fine_loss_off.item())
         else:
             psnr = mse2psnr(fine_loss.item())
         #if no_ir_train == True or jointtrain == True:
         optimizer.step()
+
+        #b = list(model_fine.parameters())[0].clone().detach()
+        #print("changed: ", torch.equal(a.data, b.data), "loss: ", loss.item())
+
 
         # Learning rate updates
         num_decay_steps = cfg.scheduler.lr_decay * 1000
@@ -660,6 +702,7 @@ def main():
                     
                     #assert 1==0
                     #rgb_coarse, _, _, rgb_fine, _, _ ,depth_fine_dex
+
                     nerf_out = run_one_iter_of_nerf_ir(
                         H,
                         W,
@@ -679,8 +722,9 @@ def main():
                         encode_direction_fn=encode_direction_fn,
                         m_thres_cand=m_thres_cand,
                         idx = coords,
+                        logdir=logdir,
                         light_extrinsic=ir_extrinsic_target,
-                        is_rgb=cfg.dataset.is_rgb,
+                        is_rgb=cfg.dataset.is_rgb
                         #gt_normal=normal_target.reshape([-1,3])
                     )
                     rgb_coarse, rgb_coarse_off, rgb_fine, rgb_fine_off = nerf_out[0], nerf_out[1], nerf_out[4], nerf_out[5]
@@ -689,7 +733,7 @@ def main():
                     depth_fine_nerf = nerf_out[8]
                     #normal_fine, albedo_fine, roughness_fine = nerf_out[11], nerf_out[12], nerf_out[13]
                     #normals_diff_map = nerf_out[13]
-                    depth_fine_dex = list(nerf_out[10:])
+                    depth_fine_dex = list(nerf_out[11:])
                     target_ray_values = img_target.unsqueeze(-1)
                     target_ray_values_off = img_off_target.unsqueeze(-1)
 
@@ -1088,6 +1132,12 @@ def get_pixel_grids_np(height, width):
     grid = np.concatenate([x_coordinates, y_coordinates, ones], axis=0)
 
     return grid
+
+def shennon_entropy(weights):
+    weights += 1e-6
+    entropy = -torch.sum(weights*torch.log(weights), dim=-1)
+    entropy_loss = torch.mean(entropy)
+    return entropy_loss
 
 if __name__ == "__main__":
     main()
