@@ -22,7 +22,7 @@ from nerf import (CfgNode, get_embedding_function, get_ray_bundle, img2mse,
                   load_blender_data, load_llff_data, meshgrid_xy, models,
                   mse2psnr, run_one_iter_of_nerf, load_messytable_data,run_one_iter_of_nerf_ir)
 
-debug_output = True
+debug_output = False
 
 def init_weights(m):
     if isinstance(m, torch.nn.Linear):
@@ -972,7 +972,7 @@ def main():
                         test_mode+"/rgb_fine_off", vutils.make_grid(rgb_fine_off[...,0], padding=0, nrow=1), i
                     )
                     #print(brdf_fine.shape, rgb_coarse_off.shape)
-                    print(torch.max(brdf_fine), torch.min(brdf_fine))
+                    # print(torch.max(brdf_fine), torch.min(brdf_fine))
                     #assert 1==0
                     writer.add_image(
                         test_mode+"/rgb_coarse_off", vutils.make_grid(rgb_coarse_off[...,0], padding=0, nrow=1), i

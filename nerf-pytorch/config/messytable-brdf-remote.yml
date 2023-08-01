@@ -61,7 +61,7 @@ dataset:
   H: 400
   W: 400
   # Stride (include one per "testskip" images in the dataset).
-  testskip: 1
+  testskip: 10
   # Do not use NDC (normalized device coordinates). Usually True for
   # synthetic (Blender) datasets.
   no_ndc: True
