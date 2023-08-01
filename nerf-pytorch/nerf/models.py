@@ -498,7 +498,15 @@ class FlexibleIRReflectanceModel(torch.nn.Module):
         W=1920,
         ir_intrinsic=None,
         ir_extrinsic=None,
-        ir_gt=None
+        ir_gt=None,
+        #reflectence
+        num_layers=4,
+        hidden_size=128,
+        skip_connect_every=4,
+        num_encoding_fn_xyz=6,
+        num_encoding_fn_dir=4,
+        include_input_xyz=True,
+        include_input_dir=True
     ):
         super(FlexibleIRReflectanceModel, self).__init__()
         self.static_ir_pat = False
@@ -522,6 +530,79 @@ class FlexibleIRReflectanceModel(torch.nn.Module):
         self.act_normal = torch.nn.Tanh()
         self.act_brdf = torch.nn.Sigmoid()
         self.act_coef = torch.nn.Softplus()
+
+
+        # view-dependent brdf 
+
+        self.num_layers = num_layers
+
+        include_input_xyz = 3 if include_input_xyz else 0
+        include_input_dir = 3 if include_input_dir else 0
+        self.dim_xyz = include_input_xyz + 2 * 3 * num_encoding_fn_xyz
+        self.dim_dir = include_input_dir + 2 * 3 * num_encoding_fn_dir
+        #print(self.dim_xyz, self.dim_dir)
+        self.skip_connect_every = skip_connect_every
+
+        self.layer1 = torch.nn.Linear(self.dim_xyz, hidden_size)
+        #torch.nn.init.zeros_(self.layer1.weight)
+        self.layers_xyz = torch.nn.ModuleList()
+        for i in range(num_layers - 1):
+            if i % self.skip_connect_every == 0 and i > 0 and i != num_layers - 1:
+                #print(self.dim_xyz + hidden_size)
+                self.layers_xyz.append(
+                    torch.nn.Linear(self.dim_xyz + hidden_size, hidden_size)
+                )
+            else:
+                self.layers_xyz.append(torch.nn.Linear(hidden_size, hidden_size))
+
+
+
+        self.layers_dir = torch.nn.ModuleList()
+        # This deviates from the original paper, and follows the code release instead.
+        self.layers_dir.append(
+            torch.nn.Linear(2*self.dim_dir + hidden_size, hidden_size // 2)
+        )
+
+        #self.fc_alpha = torch.nn.Linear(hidden_size, 1)
+
+        self.fc_brdf = torch.nn.Linear(hidden_size // 2, 1)
+        self.fc_feat = torch.nn.Linear(hidden_size, hidden_size)
+ 
+
+        #self.relu = torch.nn.functional.relu
+
+
+    def forward(self, xin):
+        xyz, view, light = xin[..., : self.dim_xyz], xin[..., self.dim_xyz : self.dim_xyz + self.dim_dir],  xin[..., self.dim_xyz + self.dim_dir:]
+        #print(xyz.shape, view.shape, light.shape)
+        #assert 1==0
+
+        x = self.layer1(xyz)
+        
+        for i in range(len(self.layers_xyz)):
+            if (
+                i % self.skip_connect_every == 0
+                and i > 0
+                and i != self.num_layers - 1
+            ):
+                #print("enter")
+                x = torch.cat((x, xyz), dim=-1)
+            #print(x.shape, len(self.layers_xyz), self.layers_xyz[i], i, self.num_layers - 1)
+            x = self.relu(self.layers_xyz[i](x))
+        
+
+        feat = self.relu(self.fc_feat(x))
+        #alpha = self.fc_alpha(x)
+        x = torch.cat((feat, view, light), dim=-1)
+        for l in self.layers_dir:
+            x = self.relu(l(x))
+        brdf = self.fc_brdf(x)
+        brdf = self.act_brdf(brdf)
+
+        return brdf
+
+
+    
 
     def get_light(self, surface_xyz, light_extrinsic):
         w2ir = torch.linalg.inv(light_extrinsic)

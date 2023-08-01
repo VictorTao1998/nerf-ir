@@ -1,12 +1,60 @@
 import torch
 import torch.nn.functional as F
 
-from .nerf_helpers import cumprod_exclusive
+from .nerf_helpers import cumprod_exclusive, get_minibatches
 from .brdf import *
 
 #brdf_specular = specular_pipeline_render_multilight_new
 brdf_specular = specular_pipeline_render_multilight_new
 import os
+
+
+def run_network_ir_env(network_fn, pts, surf2c, surf2l, chunksize, embed_fn, embeddirs_fn):
+    
+    pts_flat = pts.reshape((-1, pts.shape[-1]))
+    #c_pts_flat = c_pts.reshape((-1, c_pts.shape[-1]))
+    embedded = embed_fn(pts_flat)
+    #print(embedded.shape)
+    #assert 1==0
+    #c_embedded = embed_fn(c_pts_flat)
+    #embedded = c_embedded
+    #embedded = torch.cat((embedded, c_embedded), dim=-1)
+    #print(pts_flat.shape, embedded.shape)
+
+    if embeddirs_fn is not None:
+        viewdirs = surf2c[..., None, -3:]
+        input_dirs = viewdirs.expand(pts.shape)
+        input_dirs_flat = input_dirs.reshape((-1, input_dirs.shape[-1]))
+
+        camdirs = surf2l[..., None, -3:]
+        output_dirs = camdirs.expand(pts.shape)
+        output_dirs_flat = output_dirs.reshape((-1, output_dirs.shape[-1]))
+
+
+        embedded_indirs = embeddirs_fn(input_dirs_flat)
+        embedded_outdirs = embeddirs_fn(output_dirs_flat)
+
+        embedded = torch.cat((embedded, embedded_indirs, embedded_outdirs), dim=-1)
+
+        #c_viewdirs = c_ray_batch[..., None, -3:]
+        #c_input_dirs = c_viewdirs.expand(c_pts.shape)
+        #c_input_dirs_flat = c_input_dirs.reshape((-1, c_input_dirs.shape[-1]))
+        #c_embedded_dirs = embeddirs_fn(c_input_dirs_flat)
+        #embedded = torch.cat((embedded, c_embedded_dirs), dim=-1)
+
+    #print("before", pts_flat[0,:], c_pts_flat[0,:], viewdirs[0,:], c_viewdirs[0,:])
+    #print(pts_flat[0,:],c_pts_flat[0,:],viewdirs[0,:], c_pts_flat.shape)
+    #print(embedded.shape)
+    #assert 1==0
+    batches = get_minibatches(embedded, chunksize=chunksize)
+    #print(batches[0].shape)
+    #assert 1==0
+    preds = [network_fn(batch) for batch in batches]
+    radiance_field = torch.cat(preds, dim=0)
+    radiance_field = radiance_field.reshape(
+        list(pts.shape[:-1]) + [radiance_field.shape[-1]]
+    )
+    return radiance_field
 
 
 def volume_render_radiance_field(
@@ -160,6 +208,7 @@ def volume_render_radiance_field_ir_env(
     ray_directions,
     c_ray_directions,
     model_env=None,
+    pts=None,
     radiance_field_noise_std=0.0,
     white_background=False,
     m_thres_cand=None,
@@ -167,6 +216,7 @@ def volume_render_radiance_field_ir_env(
     idx=None,
     #d_n=None,
     joint=False,
+    is_env=False,
     #albedo_edit=None,
     #roughness_edit=None,
     #normal_edit=None,
@@ -174,7 +224,9 @@ def volume_render_radiance_field_ir_env(
     logdir=None,
     light_extrinsic=None,
     radiance_backup=None,
-    #gt_normal=None
+    #gt_normal=None,
+    encode_position_fn=None,
+    encode_direction_fn=None,
 ):
     # TESTED
     #print(depth_values[0,:])
@@ -213,12 +265,14 @@ def volume_render_radiance_field_ir_env(
     roughness_smoothness_cost_map = None
     normal_smoothness_cost_map = None
     env_rgb = torch.sigmoid(rgb)
+    radiance_field_env = None
+    surf_brdf = None
 
     #print(combined_rgb.shape, env_rgb.shape,radiance_field.shape,radiance_field_env.shape)
     #assert 1==0
     noise = 0.0
   
-    """
+
     if radiance_field_noise_std > 0.0:
         noise = (
             torch.randn(
@@ -229,7 +283,7 @@ def volume_render_radiance_field_ir_env(
             * radiance_field_noise_std
         )
         noise = noise.to(radiance_field)
-    """
+
     sigma_a = torch.nn.functional.relu(radiance_field[..., color_channel] + noise) 
     
     alpha = 1.0 - torch.exp(-sigma_a * dists)
@@ -299,6 +353,10 @@ def volume_render_radiance_field_ir_env(
     #print(weights.shape)
     acc_map = weights.sum(dim=-1)
     disp_map = 1.0 / torch.max(1e-10 * torch.ones_like(depth_map), depth_map / acc_map)
+
+    max_idx = torch.max(weights,dim=-1).indices # bs x 1
+    depth_map_max = depth_values[list(range(depth_values.shape[0])),max_idx]
+
 
     if white_background:
         
@@ -375,8 +433,7 @@ def volume_render_radiance_field_ir_env(
             torch.save(depth_values.cpu(), os.path.join(logdir, "depth_values.pt"))
             torch.save(radiance_field.cpu(), os.path.join(logdir, "occu.pt"))
             torch.save(dists.cpu(), os.path.join(logdir, "dists.pt"))
-            max_idx = torch.max(weights,dim=-1).indices # bs x 1
-            depth_map_max = depth_values[list(range(depth_values.shape[0])),max_idx]
+            
             torch.save(depth_map.cpu(), os.path.join(logdir, "depth_map.pt"))
             torch.save(depth_map_max.cpu(), os.path.join(logdir, "depth_map_max.pt"))
 
@@ -439,6 +496,15 @@ def volume_render_radiance_field_ir_env(
         surface_z = depth_map
         surface_xyz = rays_o + (surface_z).unsqueeze(-1) * rays_d  # [bs, 3]
 
+        surface_xyz_in = surface_xyz.unsqueeze(-2) # bs x s x 3
+        
+
+        
+        
+        
+
+        #print(radiance_field_env.shape)
+        #assert 1==0
 
         #surf2c = -ray_directions
         #print(light_extrinsic)
@@ -447,7 +513,44 @@ def volume_render_radiance_field_ir_env(
             direct_light, surf2l = model_env.get_light(surface_xyz, light_extrinsic) # bs x 3
         else:
             direct_light, surf2l = model_env.get_light(surface_xyz.detach(), light_extrinsic) # bs x 3
+
+        
         direct_light = direct_light.unsqueeze(-1).unsqueeze(-1)
+
+        ray_d_in = rays_d # bs x 3
+        surf2c = -ray_d_in
+        
+        
+        radiance_field_env = torch.ones(radiance_field.shape[:2]).unsqueeze(-1).cuda()
+
+        if is_env:
+            #print('enter')
+            if joint == True:
+                radiance_field_env = run_network_ir_env(
+                    model_env,
+                    pts,  # bs x s x 3
+                    surf2c, # bs x 3
+                    surf2l, # bs x 3
+                    surface_xyz.shape[0],
+                    encode_position_fn,
+                    encode_direction_fn,
+                )
+            else :
+                radiance_field_env = run_network_ir_env(
+                    model_env,
+                    pts.detach(),  # bs x s x 3
+                    surf2c.detach(), # bs x 3
+                    surf2l, # bs x 3
+                    surface_xyz.shape[0],
+                    encode_position_fn,
+                    encode_direction_fn,
+                )
+                
+        #radiance_field_env = radiance_field_env.squeeze(-1)
+
+        surf_brdf = weights[...,None] * radiance_field_env
+        surf_brdf = surf_brdf.sum(dim=-2)
+        #print(direct_light.shape)
         #print(direct_light.shape, surf2l.shape)
         #assert 1==0
 
@@ -502,10 +605,10 @@ def volume_render_radiance_field_ir_env(
         #light_pix_contrib = surface_brdf * light_rgbs * cosine[:, :, None]
         light_pix_contrib = light_rgbs
 
-        #print(light_pix_contrib.shape)
-        rgb_ir = torch.sum(light_pix_contrib, dim=1)  # [bs, 1]
+        
+        rgb_ir = torch.sum(light_pix_contrib, dim=1)*surf_brdf  # [bs, 1]
+        
         #print(relight.shape)
-        #assert 1==0
 
         #if joint == True:
         #    combined_rgb = torch.sigmoid(rgb)# + torch.sigmoid(rgb_ir)
@@ -525,11 +628,14 @@ def volume_render_radiance_field_ir_env(
         #if joint == True:
         #    rgb_map = env_rgb_map + rgb_ir
         #else:
+        #print(rgb_ir.shape, radiance_field_env.shape)
+        #assert 1==0
         if joint == True:
             rgb_map = env_rgb_map + rgb_ir
         else:
             rgb_map = env_rgb_map.detach() + rgb_ir
         rgb_map = torch.clip(rgb_map,0.,1.)
+
         #if not torch.all(~torch.isnan(surface_brdf)):
         #    print("nan rgb_map!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         #else:
@@ -538,7 +644,7 @@ def volume_render_radiance_field_ir_env(
         #print(rgb_map.shape)
         #assert 1==0
         #print(rgb_ir[0,0].item())
-    out = [rgb_map, env_rgb_map, disp_map, acc_map, weights, depth_map, depth_map_backup, sigma_a] + depth_map_dex
+    out = [rgb_map, env_rgb_map, surf_brdf, disp_map, acc_map, weights, depth_map, depth_map_max, depth_map_backup, sigma_a] + depth_map_dex
     return tuple(out)
 
 def volume_render_reflectance_field(

@@ -14,6 +14,7 @@ import torchvision.utils as vutils
 from PIL import Image
 import torch.nn.functional as F
 import open3d as o3d
+import pickle
 
 from nerf import compute_err_metric, depth_error_img, compute_obj_err, render_error_img
 
@@ -21,15 +22,13 @@ from nerf import (CfgNode, get_embedding_function, get_ray_bundle, img2mse,
                   load_blender_data, load_llff_data, meshgrid_xy, models,
                   mse2psnr, run_one_iter_of_nerf, load_messytable_data,run_one_iter_of_nerf_ir)
 
-debug_output = False
+debug_output = True
 
 def init_weights(m):
     if isinstance(m, torch.nn.Linear):
         m.weight = torch.nn.Parameter(m.weight.clone().detach(),requires_grad=True)
         m.bias = torch.nn.Parameter(m.bias.clone().detach(),requires_grad=True)
-        #torch.nn.init.zeros_(m.weight)
-        #torch.nn.init.zeros_(m.bias)
-        #m.bias.data.fill_(0.0)
+
 
 def main():
 
@@ -48,10 +47,17 @@ def main():
     )
     parser.add_argument(
         "--sceneid",
-        type=int,
-        default=0,
+        type=str,
+        default="lego",
         help="The scene id that need to train",
     )
+    parser.add_argument(
+        "--data",
+        type=str,
+        default="blender",
+        help="The datatype",
+    )
+
     configargs = parser.parse_args()
 
     # Read config file.
@@ -70,25 +76,37 @@ def main():
     H, W, focal, i_train, i_val, i_test = None, None, None, None, None, None
 
     # Load dataset
-    images, poses, render_poses, hwf = None, None, None, None
+    images, poses, ir_poses, render_poses, hwf, i_split, intrinsics, depths, labels, imgs_off, normals, roughness, albedo, name\
+         = None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
-    images, poses, ir_poses, render_poses, hwf, i_split, intrinsics, depths, labels, imgs_off, normals, roughness, albedo = load_messytable_data(
-        cfg.dataset.basedir,
-        half_res=cfg.dataset.half_res,
-        debug = False,
-        testskip=cfg.dataset.testskip,
-        cfg=cfg,
-        is_rgb=cfg.dataset.is_rgb,
-        sceneid = configargs.sceneid,
-        gt_brdf = False
-    )
-
+    if configargs.data == 'messy':
+        images, poses, ir_poses, render_poses, hwf, i_split, intrinsics, depths, labels, imgs_off, normals, roughness, albedo, name = load_messytable_data(
+            cfg.dataset.basedir,
+            half_res=cfg.dataset.half_res,
+            debug = False,
+            testskip=cfg.dataset.testskip,
+            cfg=cfg,
+            is_rgb=cfg.dataset.is_rgb,
+            sceneid = configargs.sceneid,
+            gt_brdf = False
+        )
+    elif configargs.data == 'blender':
+        images, poses, ir_poses, render_poses, hwf, i_split, intrinsics, depths, labels, imgs_off, normals, roughness, albedo, name = load_blender_data(
+            cfg.dataset.basedir,
+            half_res=cfg.dataset.half_res,
+            debug = False,
+            testskip=cfg.dataset.testskip,
+            sceneid = configargs.sceneid
+        )
+    else: assert 1==0
     color_ch = 3 if cfg.dataset.is_rgb else 1
     #print(imgs_off.shape)
     #assert 1==0
     #print(images.shape, i_split)
     #assert 1==0
     i_train, i_val, i_test = i_split
+    #print(i_val)
+    #assert 1==0
     H, W, _ = hwf
     H, W = int(H), int(W)
     if cfg.nerf.train.white_background:
@@ -139,6 +157,7 @@ def main():
     if not cfg.dataset.is_rgb:
         ir_intrinsic = intrinsics[0,:,:].to(device)
         ir_intrinsic[:2,2] = ir_intrinsic[:2,2] * 2.
+        ir_intrinsic[:2,:2] = ir_intrinsic[:2,:2] * 2.
         ir_extrinsic = ir_poses[0,:,:].to(device)
 
         model_env_fine = getattr(models, cfg.models.env.type)(
@@ -156,6 +175,13 @@ def main():
             ir_intrinsic=ir_intrinsic,
             ir_extrinsic=ir_extrinsic,
             #ir_gt="/code/nerf-git/logs_sim_brdf_near_check/0/ir_pat.pt"
+            num_layers=cfg.models.env.num_layers,
+            hidden_size=cfg.models.env.hidden_size,
+            skip_connect_every=cfg.models.env.skip_connect_every,
+            num_encoding_fn_xyz=cfg.models.env.num_encoding_fn_xyz,
+            num_encoding_fn_dir=cfg.models.env.num_encoding_fn_dir,
+            include_input_xyz=cfg.models.env.include_input_xyz,
+            include_input_dir=cfg.models.env.include_input_dir,
         )
         model_env_fine.to(device)
 
@@ -216,11 +242,17 @@ def main():
     os.makedirs(os.path.join(logdir,"pred_depth_dex"), exist_ok=True)
     os.makedirs(os.path.join(logdir,"pred_depth_err_dex"), exist_ok=True)
     os.makedirs(os.path.join(logdir,"pred_depth_nerf"), exist_ok=True)
+    os.makedirs(os.path.join(logdir,"pred_depth_nerf_max"), exist_ok=True)
+    os.makedirs(os.path.join(logdir,"pred_depth_gt"), exist_ok=True)
     os.makedirs(os.path.join(logdir,"pred_depth_err_nerf"), exist_ok=True)
+    os.makedirs(os.path.join(logdir,"pred_depth_err_nerf_max"), exist_ok=True)
     os.makedirs(os.path.join(logdir,"pred_nerf"), exist_ok=True)
     os.makedirs(os.path.join(logdir,"pred_nerf_gt"), exist_ok=True)
     os.makedirs(os.path.join(logdir,"pred_depth_pcd_nerf"), exist_ok=True)
     os.makedirs(os.path.join(logdir,"pred_depth_pcd_nerf_gt"), exist_ok=True)
+    os.makedirs(os.path.join(logdir,"pred_depth_pcd_nerf_max"), exist_ok=True)
+    os.makedirs(os.path.join(logdir,"meta"), exist_ok=True)
+    
     
 
     writer = SummaryWriter(logdir)
@@ -246,6 +278,7 @@ def main():
     #no_ir_train = True
     #jointtrain = False
     is_joint = False
+    is_env = False
     #model_env_fine.light_attenuation_coeff.requires_grad = False
 
     #prev_params = list(model_env_fine.parameters())
@@ -266,85 +299,28 @@ def main():
         if i == cfg.experiment.jointtrain_start:
             is_joint = True
             model_backup = copy.deepcopy(model_fine)
-            for param in model_backup.parameters():
-                param.requires_grad = False
+            #model_env_fine.eval()
+            #for param in model_backup.parameters():
+            #    param.requires_grad = False
+            #for param in model_env_fine.parameters():
+            #    param.requires_grad = False
 
-        if i == cfg.experiment.joint_start:            
+        if i == cfg.experiment.finetune_start:            
+            is_env = True
             #model_env_fine.ir_pattern.requires_grad = False
             #model_env_fine.static_ir_pat = True
-            model_coarse.train()
-            model_fine.train()
-            if not cfg.dataset.is_rgb:
-                model_env_fine.train()
+            #model_coarse.train()
+            #model_fine.train()
+            #if not cfg.dataset.is_rgb:
+            #    model_env_fine.train()
         
-
-
-        
-        """
-        if is_joint == True and i < cfg.experiment.joint_start:
-            if i % cfg.experiment.swap_every == 0:
-                if train_depth:
-                    #print("train_depth_swap true")
-                    for param in model_coarse.parameters():
-                        param.requires_grad = False
-                    for param in model_fine.parameters():
-                        param.requires_grad = False
-                    #for param in model_env_coarse.parameters():
-                    #    param.requires_grad = True
-                    for param in model_env_fine.parameters():
-                        param.requires_grad = True
-
-                    model_coarse.eval()
-                    model_fine.eval()
-                    if not cfg.dataset.is_rgb:
-                    #    model_env_coarse.train()
-                        model_env_fine.train()
-
-                    train_depth = False
-                else:
-                    #print("train_depth_swap false")
-                    for param in model_coarse.parameters():
-                        param.requires_grad = True
-                    for param in model_fine.parameters():
-                        param.requires_grad = True
-                    #for param in model_env_coarse.parameters():
-                    #    param.requires_grad = False
-                    for param in model_env_fine.parameters():
-                        param.requires_grad = False
-
-                    model_coarse.train()
-                    model_fine.train()
-                    if not cfg.dataset.is_rgb:
-                    #    model_env_coarse.eval()
-                        model_env_fine.eval()
-                    
-                    train_depth = True
-        elif i == cfg.experiment.joint_start:
-            #print("train_joint_start")
-            for param in model_coarse.parameters():
-                param.requires_grad = True
-            for param in model_fine.parameters():
-                param.requires_grad = True
-            #for param in model_env_coarse.parameters():
-            #    param.requires_grad = True
-            for param in model_env_fine.parameters():
-                param.requires_grad = True
-            
-            model_env_fine.ir_pattern.requires_grad = False
-            model_env_fine.static_ir_pat = True
-                
-            model_coarse.train()
-            model_fine.train()
-            if not cfg.dataset.is_rgb:
-            #    model_env_coarse.train()
-                model_env_fine.train()
-        """
 
 
         rgb_coarse, rgb_fine = None, None
         target_ray_values = None
 
         img_idx = np.random.choice(i_train)
+        
         img_target = images[img_idx].to(device)
         
         pose_target = poses[img_idx, :, :].to(device)
@@ -368,7 +344,9 @@ def main():
         #print(intrinsic_target)
         #print(img_idx)
         #print("===========================================")
+        
         ray_origins, ray_directions, cam_origins, cam_directions = get_ray_bundle(H, W, focal, pose_target, intrinsic_target)
+   
         coords = torch.stack(
             meshgrid_xy(torch.arange(H).to(device), torch.arange(W).to(device)),
             dim=-1,
@@ -377,7 +355,9 @@ def main():
         select_inds = np.random.choice(
             coords.shape[0], size=(cfg.nerf.train.num_random_rays), replace=False
         )
+        
         select_inds = coords[select_inds]
+
         #print(ray_origins.shape)
         #assert 1==0
         ray_origins = ray_origins[select_inds[:, 0], select_inds[:, 1], :]
@@ -438,6 +418,7 @@ def main():
             m_thres_cand=m_thres_cand,
             idx=select_inds,
             joint=is_joint,
+            is_env=is_env,
             logdir=logdir,
             light_extrinsic=ir_extrinsic_target,
             is_rgb=cfg.dataset.is_rgb,
@@ -446,9 +427,12 @@ def main():
         )
         
         rgb_coarse, rgb_off_coarse, rgb_fine, rgb_off_fine = nerf_out[0], nerf_out[1], nerf_out[4], nerf_out[5]
-        depth_fine_nerf = nerf_out[8]
-        depth_fine_nerf_backup = nerf_out[9]
-        weights_fine = nerf_out[10] # bs x 128
+        brdf_fine = nerf_out[8]
+
+        depth_fine_nerf = nerf_out[9]
+        depth_fine_nerf_max = nerf_out[10]
+        depth_fine_nerf_backup = nerf_out[11]
+        weights_fine = nerf_out[12] # bs x 128
         
         #alpha_fine = nerf_out[10]
         #normal_fine = nerf_out[11]
@@ -533,7 +517,8 @@ def main():
                     depth_fine_nerf, depth_fine_nerf_backup
                 )
 
-            depth_valid_mask = torch.logical_and(target_d > 0, target_d < 2.5)
+            #depth_valid_mask = torch.logical_and(target_d > 0, target_d < 2.5)
+            depth_valid_mask = torch.logical_and(target_d > 0, target_d < 5)
             fine_nerf_depth_loss_gt = torch.nn.functional.mse_loss(
                 depth_fine_nerf[depth_valid_mask], target_d[depth_valid_mask]
             )
@@ -668,12 +653,17 @@ def main():
             mean_nerf_abs_err = 0
             mean_nerf_err4 = 0
             mean_nerf_obj_err = 0
+            mean_nerf_max_abs_err = 0
+            mean_nerf_max_err4 = 0
+            mean_nerf_max_obj_err = 0
             mean_dex_abs_err = 0
             mean_dex_err4 = 0
             mean_dex_obj_err = 0
 
             start = time.time()
-            for img_idx in i_val:
+            rchoice = np.random.choice(i_val, len(i_val), replace=False)
+
+            for img_idx in rchoice:
                 with torch.no_grad():
                     rgb_coarse, rgb_fine = None, None
                     target_ray_values = None
@@ -688,6 +678,8 @@ def main():
                     #print(label_target.shape, label_target[135,240])
                     #assert 1==0
                     intrinsic_target = intrinsics[img_idx,:,:].to(device)
+                    #print(H,W,focal,pose_target,intrinsic_target,name[img_idx])
+                    #assert 1==0
                     ray_origins, ray_directions, cam_origins, cam_directions = get_ray_bundle(
                         H, W, focal, pose_target, intrinsic_target
                     )
@@ -722,6 +714,8 @@ def main():
                         encode_direction_fn=encode_direction_fn,
                         m_thres_cand=m_thres_cand,
                         idx = coords,
+                        joint=is_joint,
+                        is_env=is_env,
                         logdir=logdir,
                         light_extrinsic=ir_extrinsic_target,
                         is_rgb=cfg.dataset.is_rgb
@@ -729,11 +723,12 @@ def main():
                     )
                     rgb_coarse, rgb_coarse_off, rgb_fine, rgb_fine_off = nerf_out[0], nerf_out[1], nerf_out[4], nerf_out[5]
                     #print(rgb_coarse_off[135,240,:])
-
-                    depth_fine_nerf = nerf_out[8]
+                    brdf_fine = nerf_out[8]
+                    depth_fine_nerf = nerf_out[9]
+                    depth_fine_nerf_max = nerf_out[10]
                     #normal_fine, albedo_fine, roughness_fine = nerf_out[11], nerf_out[12], nerf_out[13]
                     #normals_diff_map = nerf_out[13]
-                    depth_fine_dex = list(nerf_out[11:])
+                    depth_fine_dex = list(nerf_out[13:])
                     target_ray_values = img_target.unsqueeze(-1)
                     target_ray_values_off = img_off_target.unsqueeze(-1)
 
@@ -764,7 +759,8 @@ def main():
                     #assert 1==0
 
                     gt_depth_torch = depth_target.cpu()
-                    img_ground_mask = (gt_depth_torch > 0) & (gt_depth_torch < 1.25)
+                    #img_ground_mask = (gt_depth_torch > 0) & (gt_depth_torch < 1.25)
+                    img_ground_mask = (gt_depth_torch > 0) & (gt_depth_torch < 5)
                     min_err = None
                     min_abs_err = 100000000000.
                     min_abs_depth = None
@@ -791,6 +787,19 @@ def main():
                     mean_nerf_abs_err += nerf_err['depth_abs_err']
                     mean_nerf_err4 += nerf_err['depth_err4']
                     mean_nerf_obj_err += total_obj_depth_err_nerf
+                    ########## depth max #############
+                    pred_depth_nerf_max = depth_fine_nerf_max.detach().cpu()
+                    nerf_max_err = compute_err_metric(gt_depth_torch, pred_depth_nerf_max, img_ground_mask)
+
+                    #total_obj_depth_err_dex, total_obj_depth_4_err_dex, total_obj_count_dex = compute_obj_err(gt_depth_torch, min_abs_depth, label_target.detach().cpu(), img_ground_mask)
+                    total_obj_depth_err_nerf_max, total_obj_depth_4_err_nerf_max, total_obj_count_nerf_max = \
+                        compute_obj_err(gt_depth_torch, pred_depth_nerf_max, label_target.detach().cpu(), img_ground_mask)
+
+                    mean_nerf_max_abs_err += nerf_max_err['depth_abs_err']
+                    mean_nerf_max_err4 += nerf_max_err['depth_err4']
+                    mean_nerf_max_obj_err += total_obj_depth_err_nerf_max
+                    ########## depth max #############
+
 
                     mean_dex_abs_err += min_err['depth_abs_err']
                     mean_dex_err4 += min_err['depth_err4']
@@ -805,29 +814,42 @@ def main():
                     rgb_fine_np_img = Image.fromarray(rgb_fine_np, mode='L')
                     img_target_np_img = Image.fromarray(img_target_np, mode='L')
                     pred_depth_nerf_np = pred_depth_nerf.numpy()
+                    pred_depth_nerf_max_np = pred_depth_nerf_max.numpy()
                     depth_np_gt = depth_target.cpu().numpy()
                     if debug_output:
                         rgb_fine_np_img.save(os.path.join(logdir,"pred_nerf",test_mode+"_pred_nerf_step_"+str(i)+ "_" + str(img_idx) + ".png"))
                         img_target_np_img.save(os.path.join(logdir,"pred_nerf_gt",test_mode+"_pred_nerf_gt_step_"+str(i)+ "_" + str(img_idx) + ".png"))
-                        #print(np.max(rgb_fine_np), np.min(rgb_fine_np), np.max(img_target_np), np.min(img_target_np))
-                        
-                        #assert 1==0
-                    
-                        
+  
                         depth_pts = depth2pts_np(pred_depth_nerf_np, intrinsic_target.cpu().numpy(), pose_target.cpu().numpy())
                         pts_o3d = o3d.utility.Vector3dVector(depth_pts)
                         pcd = o3d.geometry.PointCloud(pts_o3d)
                         o3d.io.write_point_cloud(os.path.join(logdir,"pred_depth_pcd_nerf",test_mode+"_pred_depth_pcd_step_"+str(i)+ "_" + str(img_idx) + ".ply"), pcd)
 
-                        
+                        depth_pts = depth2pts_np(pred_depth_nerf_max_np, intrinsic_target.cpu().numpy(), pose_target.cpu().numpy())
+                        pts_o3d = o3d.utility.Vector3dVector(depth_pts)
+                        pcd = o3d.geometry.PointCloud(pts_o3d)
+                        o3d.io.write_point_cloud(os.path.join(logdir,"pred_depth_pcd_nerf_max",test_mode+"_pred_depth_pcd_step_"+str(i)+ "_" + str(img_idx) + ".ply"), pcd)
+                  
                         depth_pts = depth2pts_np(depth_np_gt, intrinsic_target.cpu().numpy(), pose_target.cpu().numpy())
                         pts_o3d = o3d.utility.Vector3dVector(depth_pts)
                         pcd = o3d.geometry.PointCloud(pts_o3d)
                         o3d.io.write_point_cloud(os.path.join(logdir,"pred_depth_pcd_nerf_gt",test_mode+"_gt_depth_pcd_step_"+str(i)+ "_" + str(img_idx) + ".ply"), pcd)
 
+                        scene_info = {
+                            "intrinsic": intrinsic_target.cpu().numpy(),
+                            "extrinsic": pose_target.cpu().numpy()
+                        }
+                        meta_loc = os.path.join(logdir,"meta")
+                        with open(os.path.join(meta_loc, test_mode+"_meta_" + str(img_idx) + ".pkl"), "wb") as f:
+                            pickle.dump(scene_info, f)
+
 
                     #print(pred_depth_nerf.shape, depth_target.shape)
                     #assert 1==0
+                    depth_np_gt_out = depth_np_gt*1000
+                    depth_np_gt_out = (depth_np_gt_out).astype(np.uint32)
+                    out_depth_gt = Image.fromarray(depth_np_gt_out, mode='I')
+                    out_depth_gt.save(os.path.join(logdir,"pred_depth_gt",test_mode+"_depth_gt_" + str(img_idx) + ".png"))
 
 
                     pred_depth_nerf_np = pred_depth_nerf_np*1000
@@ -849,6 +871,28 @@ def main():
                         + str(nerf_err['depth_err4'])
                         + " Nerf Obj Err: "
                         + str(total_obj_depth_err_nerf)
+                        + "\n"
+                        )
+
+                    pred_depth_nerf_max_np = pred_depth_nerf_max_np*1000
+                    pred_depth_nerf_max_np = (pred_depth_nerf_max_np).astype(np.uint32)
+                    out_pred_depth_nerf_max = Image.fromarray(pred_depth_nerf_max_np, mode='I')
+                    out_pred_depth_nerf_max.save(os.path.join(logdir,"pred_depth_nerf_max",test_mode+"_pred_depth_step_"+str(i)+ "_" + str(img_idx) + ".png"))
+                    pred_depth_nerf_max_err_np = depth_error_img((pred_depth_nerf_max.unsqueeze(0))*1000, (gt_depth_torch.unsqueeze(0))*1000, img_ground_mask.unsqueeze(0))
+                    pred_depth_nerf_max_err_np_img = (pred_depth_nerf_max_err_np*255).astype(np.uint8)
+                    pred_depth_nerf_max_err_np_img = Image.fromarray(pred_depth_nerf_max_err_np_img, mode='RGB')
+                    pred_depth_nerf_max_err_np_img.save(os.path.join(logdir,"pred_depth_err_nerf_max",test_mode+"_pred_depth_err_step_"+str(i)+ "_" + str(img_idx) + ".png"))
+                    with open(os.path.join(logdir,"pred_depth_err_nerf_max", test_mode+"_output_result.txt"), "a") as f:
+                        f.write("iter: "
+                        + str(i)
+                        + " img_idx: "
+                        + str(img_idx)
+                        + " Nerf Max Abs Err: "
+                        + str(nerf_max_err['depth_abs_err'])
+                        + " Nerf Max Err4: "
+                        + str(nerf_max_err['depth_err4'])
+                        + " Nerf Max Obj Err: "
+                        + str(total_obj_depth_err_nerf_max)
                         + "\n"
                         )
 
@@ -879,6 +923,10 @@ def main():
             mean_nerf_abs_err = mean_nerf_abs_err/len(i_val)
             mean_nerf_err4 = mean_nerf_err4/len(i_val)
             mean_nerf_obj_err = mean_nerf_obj_err/len(i_val)
+
+            mean_nerf_max_abs_err = mean_nerf_max_abs_err/len(i_val)
+            mean_nerf_max_err4 = mean_nerf_max_err4/len(i_val)
+            mean_nerf_max_obj_err = mean_nerf_max_obj_err/len(i_val)
 
             mean_dex_abs_err = mean_dex_abs_err/len(i_val)
             mean_dex_err4 = mean_dex_err4/len(i_val)
@@ -923,8 +971,14 @@ def main():
                     writer.add_image(
                         test_mode+"/rgb_fine_off", vutils.make_grid(rgb_fine_off[...,0], padding=0, nrow=1), i
                     )
+                    #print(brdf_fine.shape, rgb_coarse_off.shape)
+                    print(torch.max(brdf_fine), torch.min(brdf_fine))
+                    #assert 1==0
                     writer.add_image(
                         test_mode+"/rgb_coarse_off", vutils.make_grid(rgb_coarse_off[...,0], padding=0, nrow=1), i
+                    )
+                    writer.add_image(
+                        test_mode+"/rgb_brdf", vutils.make_grid(brdf_fine, padding=0, nrow=1), i
                     )
 
                 else:
@@ -1032,14 +1086,20 @@ def main():
                 + str(mean_dex_abs_err)
                 + " Dex Err4: "
                 + str(mean_dex_err4)
+                + " Dex Obj Err: "
+                + str(mean_dex_obj_err)
                 + " Nerf Abs Err: "
                 + str(mean_nerf_abs_err)
                 + " Nerf Err4: "
                 + str(mean_nerf_err4)
-                + " Dex Obj Err: "
-                + str(mean_dex_obj_err)
                 + " Nerf Obj Err: "
                 + str(mean_nerf_obj_err)
+                + " Nerf Max Abs Err: "
+                + str(mean_nerf_max_abs_err)
+                + " Nerf Max Err4: "
+                + str(mean_nerf_max_err4)
+                + " Nerf Max Obj Err: "
+                + str(mean_nerf_max_obj_err)
                 + " Best Thres: "
                 + str(min_cand)
             )
@@ -1053,17 +1113,23 @@ def main():
                 + " Time: "
                 + str(time.time() - start)
                 + " Dex Abs Err: "
-                + str(min_err['depth_abs_err'])
+                + str(mean_dex_abs_err)
                 + " Dex Err4: "
-                + str(min_err['depth_err4'])
-                + " Nerf Abs Err: "
-                + str(nerf_err['depth_abs_err'])
-                + " Nerf Err4: "
-                + str(nerf_err['depth_err4'])
+                + str(mean_dex_err4)
                 + " Dex Obj Err: "
-                + str(total_obj_depth_err_dex)
+                + str(mean_dex_obj_err)
+                + " Nerf Abs Err: "
+                + str(mean_nerf_abs_err)
+                + " Nerf Err4: "
+                + str(mean_nerf_err4)
                 + " Nerf Obj Err: "
-                + str(total_obj_depth_err_nerf)
+                + str(mean_nerf_obj_err)
+                + " Nerf Max Abs Err: "
+                + str(mean_nerf_max_abs_err)
+                + " Nerf Max Err4: "
+                + str(mean_nerf_max_err4)
+                + " Nerf Max Obj Err: "
+                + str(mean_nerf_max_obj_err)
                 + "\n"
                 )
 

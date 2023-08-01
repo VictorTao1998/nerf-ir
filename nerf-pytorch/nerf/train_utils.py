@@ -8,6 +8,33 @@ from .nerf_helpers import sample_pdf_2 as sample_pdf
 from .volume_rendering_utils import volume_render_radiance_field, \
     volume_render_radiance_field_ir, volume_render_radiance_field_ir_env,volume_render_reflectance_field
 
+def computer_chamfer_distance(pcd1, pcd2):
+    chamfer_x = 0
+    chamfer_y = 0
+
+    twomm = 0
+    fourmm = 0
+
+    for i in range(pcd1.shape[0]):
+        cp = pcd1[i]
+        distance = torch.norm(pcd2 - cp, dim=-1)
+        chamfer_x += torch.min(distance)
+        if torch.min(distance) > twomm:
+            twomm += 1
+        if torch.min(distance) > fourmm:
+            fourmm =+ 1
+
+    for i in range(pcd2.shape[0]):
+        cp = pcd2[i]
+        distance = torch.norm(pcd1 - cp, dim=-1)
+        chamfer_y += torch.min(distance)
+        if torch.min(distance) > twomm:
+            twomm += 1
+        if torch.min(distance) > fourmm:
+            fourmm =+ 1
+    twomm = twomm/(pcd1.shape[0] + pcd2.shape[0])
+    fourmm = fourmm/(pcd1.shape[0] + pcd2.shape[0])
+    return chamfer_x + chamfer_y, twomm, fourmm
 
 def compute_err_metric(depth_gt, depth_pred, mask):
     """
@@ -268,7 +295,7 @@ def run_network_ir(network_fn, pts, ray_batch, chunksize, embed_fn, embeddirs_fn
     return radiance_field
 
 #def run_network_ir_env(network_fn, pts, c_pts, ray_batch, c_ray_batch, chunksize, embed_fn, embeddirs_fn):
-def run_network_ir_env(network_fn, pts, chunksize, embed_fn):
+def run_network_ir_env(network_fn, pts, ray_batch, chunksize, embed_fn, embeddirs_fn):
     
     pts_flat = pts.reshape((-1, pts.shape[-1]))
     #c_pts_flat = c_pts.reshape((-1, c_pts.shape[-1]))
@@ -279,7 +306,7 @@ def run_network_ir_env(network_fn, pts, chunksize, embed_fn):
     #embedded = c_embedded
     #embedded = torch.cat((embedded, c_embedded), dim=-1)
     #print(pts_flat.shape, embedded.shape)
-    """
+
     if embeddirs_fn is not None:
         viewdirs = ray_batch[..., None, -3:]
         input_dirs = viewdirs.expand(pts.shape)
@@ -287,12 +314,12 @@ def run_network_ir_env(network_fn, pts, chunksize, embed_fn):
         embedded_dirs = embeddirs_fn(input_dirs_flat)
         embedded = torch.cat((embedded, embedded_dirs), dim=-1)
 
-        c_viewdirs = c_ray_batch[..., None, -3:]
-        c_input_dirs = c_viewdirs.expand(c_pts.shape)
-        c_input_dirs_flat = c_input_dirs.reshape((-1, c_input_dirs.shape[-1]))
-        c_embedded_dirs = embeddirs_fn(c_input_dirs_flat)
-        embedded = torch.cat((embedded, c_embedded_dirs), dim=-1)
-    """
+        #c_viewdirs = c_ray_batch[..., None, -3:]
+        #c_input_dirs = c_viewdirs.expand(c_pts.shape)
+        #c_input_dirs_flat = c_input_dirs.reshape((-1, c_input_dirs.shape[-1]))
+        #c_embedded_dirs = embeddirs_fn(c_input_dirs_flat)
+        #embedded = torch.cat((embedded, c_embedded_dirs), dim=-1)
+
     #print("before", pts_flat[0,:], c_pts_flat[0,:], viewdirs[0,:], c_viewdirs[0,:])
     #print(pts_flat[0,:],c_pts_flat[0,:],viewdirs[0,:], c_pts_flat.shape)
     #print(embedded.shape)
@@ -454,6 +481,7 @@ def predict_and_render_radiance_ir(
     encode_direction_fn=None,
     m_thres_cand=None,
     joint=False,
+    is_env=False,
     #albedo_edit=None,
     #roughness_edit=None,
     #normal_edit=None,
@@ -507,6 +535,7 @@ def predict_and_render_radiance_ir(
     pts = ro[..., None, :] + rd[..., None, :] * z_vals[..., :, None]
     c_pts = c_ro[..., None, :] + c_rd[..., None, :] * z_vals[..., :, None]
 
+    
     radiance_field = run_network_ir(
         model_coarse,
         pts,
@@ -515,7 +544,8 @@ def predict_and_render_radiance_ir(
         encode_position_fn,
         encode_direction_fn
     )
-    """
+    
+    '''
     radiance_field_env = run_network_ir_env(
         model_env_coarse,
         pts,
@@ -526,7 +556,8 @@ def predict_and_render_radiance_ir(
         encode_position_fn,
         encode_direction_fn
     )
-    """
+    '''
+   
     #radiance_field_env = None
 
     #print(radiance_field_env.shape)
@@ -564,7 +595,9 @@ def predict_and_render_radiance_ir(
         joint=joint,
         light_extrinsic=light_extrinsic
     )
-    rgb_coarse, rgb_off_coarse, disp_coarse, acc_coarse, weights, depth_coarse = coarse_out[0], coarse_out[1], coarse_out[2], coarse_out[3], coarse_out[4], coarse_out[5]
+    rgb_coarse, rgb_off_coarse, disp_coarse, acc_coarse, weights, depth_coarse = coarse_out[0], coarse_out[1], coarse_out[3], coarse_out[4], coarse_out[5], coarse_out[6]
+    
+
     #assert 1==0
     #rgb_coarse_env, disp_coarse_env, acc_coarse_env, weights_env, depth_coarse_env = \
     #    coarse_out_env[0], coarse_out_env[1], coarse_out_env[2], coarse_out_env[3], coarse_out_env[4]
@@ -657,18 +690,25 @@ def predict_and_render_radiance_ir(
                 derived_normals = -F.normalize(gradients, p=2, dim=-1, eps=1e-6)
                 derived_normals = derived_normals.view(-1, 3)
             
-            '''
-            radiance_field_env = run_network_ir_env(
-                model_env_fine,
-                pts_fine,
-                c_pts_fine,
-                ray_batch[..., -6:-3],
-                ray_batch[..., -3:],
-                getattr(options.nerf, mode).chunksize,
-                encode_position_fn,
-                encode_direction_fn,
-            )
-            '''
+        """
+        #print(pts_fine.shape, ray_batch[..., -6:-3].shape)
+        '''
+        radiance_field_env = run_network_ir_env(
+            model_env_fine,
+            pts_fine,  # bs x s x 3
+            #c_pts_fine, 
+            ray_batch[..., -6:-3], # bs x 3
+            #ray_batch[..., -3:],
+            getattr(options.nerf, mode).chunksize,
+            encode_position_fn,
+            encode_direction_fn,
+        )
+        '''
+        #print(radiance_field_env.shape)
+        #print(torch.max(radiance_field_env), torch.min(radiance_field_env))
+        #assert 1==0
+        """
+       
             pts_fine_jitter = pts_fine + torch.randn_like(pts_fine) * 0.01
             radiance_field_env = run_network_ir_env(
                 model_env_fine,
@@ -695,6 +735,7 @@ def predict_and_render_radiance_ir(
             rd,
             c_rd,
             model_env_fine,
+            pts=pts_fine,
             radiance_field_noise_std=getattr(options.nerf, mode).radiance_field_noise_std,
             white_background=getattr(options.nerf, mode).white_background,
             m_thres_cand=m_thres_cand,
@@ -702,6 +743,7 @@ def predict_and_render_radiance_ir(
             idx=idx,
             #d_n=derived_normals,
             joint=joint,
+            is_env=is_env,
             #albedo_edit=albedo_edit,
             #roughness_edit=roughness_edit,
             #normal_edit=normal_edit,
@@ -709,16 +751,19 @@ def predict_and_render_radiance_ir(
             logdir=logdir,
             light_extrinsic=light_extrinsic,
             radiance_backup=radiance_field_backup,
-            #gt_normal=gt_normal
+            #gt_normal=gt_normal,
+            encode_position_fn=encode_position_fn,
+            encode_direction_fn=encode_direction_fn,
         )
         #print(z_vals[0,:])
-        rgb_fine, rgb_off_fine, disp_fine, acc_fine = fine_out[0], fine_out[1], fine_out[2], fine_out[3]
+        rgb_fine, rgb_off_fine, brdf_fine, disp_fine, acc_fine = fine_out[0], fine_out[1], fine_out[2], fine_out[3], fine_out[4]
         #normal_fine, albedo_fine, roughness_fine = fine_out[8], fine_out[9], fine_out[10]
-        weights_fine = fine_out[4]
+        weights_fine = fine_out[5]
         #print(weights_fine.shape)
         #assert 1==0
-        depth_fine_nerf = fine_out[5]
-        depth_fine_nerf_backup = fine_out[6]
+        depth_fine_nerf = fine_out[6]
+        depth_fine_nerf_max = fine_out[7]
+        depth_fine_nerf_backup = fine_out[8]
         #alpha_fine = fine_out[7]
         #normals_diff_map, d_n_map = fine_out[11], fine_out[12]
         #albedo_cost_map, roughness_cost_map, normal_cost_map = fine_out[13], fine_out[14], fine_out[15]
@@ -726,14 +771,16 @@ def predict_and_render_radiance_ir(
         #rgb_fine_env, disp_fine_env, acc_fine_env, depth_fine_env = \
         #fine_out_env[0], fine_out_env[1], fine_out_env[2], fine_out_env[4]
         #print(alpha_fine[500,:])
-        depth_fine_dex = list(fine_out[8:])
+        depth_fine_dex = list(fine_out[10:])
         #rgb_fine_final = torch.clip(rgb_fine + rgb_fine_env,0.,1.)
         #print(depth_fine_nerf.shape, alpha_fine.shape, rgb_coarse.shape)
     #print(acc_fine.shape)
     #print(alpha_fine.shape)
     #assert 1==0
     out = [rgb_coarse, rgb_off_coarse, disp_coarse, acc_coarse, \
-        rgb_fine, rgb_off_fine, disp_fine, acc_fine, depth_fine_nerf, depth_fine_nerf_backup, weights_fine\
+        rgb_fine, rgb_off_fine, disp_fine, acc_fine, \
+        brdf_fine, depth_fine_nerf, depth_fine_nerf_max, \
+        depth_fine_nerf_backup, weights_fine\
         #alpha_fine, normal_fine, albedo_fine, roughness_fine, normals_diff_map, 
         #d_n_map, albedo_cost_map, roughness_cost_map, normal_cost_map
         ] + depth_fine_dex
@@ -1006,6 +1053,7 @@ def run_one_iter_of_nerf_ir(
     m_thres_cand=None,
     idx=None,
     joint=False,
+    is_env=False,
     #albedo_edit=None,
     #roughness_edit = None,
     #normal_edit=None,
@@ -1040,9 +1088,12 @@ def run_one_iter_of_nerf_ir(
     ]
     if model_fine:
         restore_shapes += restore_shapes
+        restore_shapes += [ray_directions.shape[:-1]] # brdf_fine
         restore_shapes += [ray_directions.shape[:-1]] # depth_fine
+        restore_shapes += [ray_directions.shape[:-1]] # depth_fine_max
         restore_shapes += [ray_directions.shape[:-1]] # depth_fine_backup
-        restore_shapes += [torch.Size([270,480,128])] # weights
+        H,W = ray_directions.shape[0],ray_directions.shape[1]
+        restore_shapes += [torch.Size([H,W,128])] # weights
         #print(out_shape)
         #assert 1==0
         #print(ray_directions.shape)
@@ -1093,6 +1144,7 @@ def run_one_iter_of_nerf_ir(
             encode_direction_fn=encode_direction_fn,
             m_thres_cand=m_thres_cand,
             joint=joint,
+            is_env=is_env,
             #albedo_edit=albedo_edit,
             #roughness_edit=roughness_edit,
             #normal_edit=normal_edit,

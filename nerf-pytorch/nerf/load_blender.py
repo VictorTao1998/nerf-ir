@@ -39,44 +39,138 @@ def pose_spherical(theta, phi, radius):
     return c2w
 
 
-def load_blender_data(basedir, half_res=False, testskip=1, debug=False):
+def load_blender_data(basedir, half_res=False, testskip=1, debug=False, sceneid="hotdog"):
+    basedir = os.path.join(basedir, sceneid)
+
     splits = ["train", "val", "test"]
     metas = {}
+    width = 800
+    height = 800
     for s in splits:
-        with open(os.path.join(basedir, f"transforms_{s}.json"), "r") as fp:
+        with open(os.path.join(basedir, s, f"transforms.json"), "r") as fp:
             metas[s] = json.load(fp)
 
     all_imgs = []
+    all_imgs_off = []
     all_poses = []
+    all_intrinsics = []
+    all_ir_poses = []
+    all_normals = []
+    all_depths = []
+    all_labels = []
+    all_names = []
     counts = [0]
     for s in splits:
         meta = metas[s]
         imgs = []
+        imgs_off = []
         poses = []
+        intrinsics = []
+        ir_poses = []
+        normals = []
+        depths = []
+        labels = []
+
         if s == "train" or testskip == 0:
             skip = 1
         else:
             skip = testskip
 
         for frame in meta["frames"][::skip]:
-            fname = os.path.join(basedir, frame["file_path"] + ".png")
-            #testimg = np.array(imageio.imread(fname))
-            #print(testimg.shape, np.max(testimg), np.min(testimg))
-            imgs.append(imageio.imread(fname))
-            poses.append(np.array(frame["transform_matrix"]))
+            fname = os.path.join(basedir, s, frame["file_path"], "ir_on.png")
+            fname_off = os.path.join(basedir, s, frame["file_path"], "ir_off.png")
+            
+
+            cimg = imageio.imread(fname)
+            #cimg_3 = np.zeros([cimg.shape[0],cimg.shape[1],3])
+            #cimg_3[:,:,0] = cimg
+            #cimg_3[:,:,1] = cimg
+            #cimg_3[:,:,2] = cimg
+
+            cimg_off = imageio.imread(fname_off)
+            #cimg_off_3 = np.zeros([cimg_off.shape[0],cimg_off.shape[1],3])
+            #cimg_off_3[:,:,0] = cimg_off
+            #cimg_off_3[:,:,1] = cimg_off
+            #cimg_off_3[:,:,2] = cimg_off
+            
+            imgs.append(cimg)
+            imgs_off.append(cimg_off)
+
+
+            cpose = np.array(frame["transform_matrix"])
+            poses.append(cpose)
+            
+            ir_poses.append(np.array(frame["transform_ir"]))
+
+
+            fov = meta['camera_angle_x']
+            focal = .5 * width / np.tan(.5 * fov)
+            cur_intrinsic = np.eye(3)
+            cur_intrinsic[:2,2] = width/2
+            cur_intrinsic[0,0] = focal
+            cur_intrinsic[1,1] = focal
+
+            if half_res:
+                cur_intrinsic[:2,:] = cur_intrinsic[:2,:]/2                                                                                      
+                intrinsics.append(cur_intrinsic)
+            else:
+                intrinsics.append(cur_intrinsic)
+
+            normal_img = cv2.imread(os.path.join(basedir, s, frame["file_path"], "normal.png"), cv2.IMREAD_UNCHANGED)
+            normal_img = (normal_img.astype(float)) / 1000. - 1
+
+            norm = np.linalg.norm(normal_img, axis=-1)
+            norm_mask = norm == 0
+            dummy_normal = np.zeros([np.sum(norm_mask),3])
+            dummy_normal[:,-1] = 1.
+            normal_img[norm_mask] = dummy_normal
+            normals.append(normal_img)
+
+            cdepth = np.array(Image.open(os.path.join(basedir, s, frame["file_path"], "depth.png")))/1000.
+            depths.append(cdepth)
+
+            labelc = np.ones_like(cdepth)*18
+            mask = np.logical_and(cdepth < 5.5,  cdepth > 0)
+            labelc[mask] = 1
+            labelc = labelc.astype(np.uint8)
+            labels.append(labelc)
+
+            all_names.append(fname)
+            
+        
+
         imgs = (np.array(imgs) / 255.0).astype(np.float32)
+        imgs_off = (np.array(imgs_off) / 255.0).astype(np.float32)
         #print(imgs.shape)
         poses = np.array(poses).astype(np.float32)
+        ir_poses = np.array(ir_poses).astype(np.float32)
+        intrinsics = np.array(intrinsics).astype(np.float32)
+        normals = np.array(normals).astype(np.float32)
+        depths = np.array(depths).astype(np.float32)
+        labels = np.array(labels).astype(np.float32)
+
         counts.append(counts[-1] + imgs.shape[0])
         all_imgs.append(imgs)
+        all_imgs_off.append(imgs_off)
         all_poses.append(poses)
+        all_intrinsics.append(intrinsics)
+        all_ir_poses.append(ir_poses)
+        all_normals.append(normals)
+        all_depths.append(depths)
+        all_labels.append(labels)
 
 
     i_split = [np.arange(counts[i], counts[i + 1]) for i in range(len(splits))]
     #print(i_split)
     #assert 1==0
     imgs = np.concatenate(all_imgs, 0)
+    imgs_off = np.concatenate(all_imgs_off, 0)
     poses = np.concatenate(all_poses, 0)
+    ir_poses = np.concatenate(all_ir_poses, 0)
+    intrinsics = np.concatenate(all_intrinsics, 0)
+    normals = np.concatenate(all_normals, 0)
+    depths = np.concatenate(all_depths, 0)
+    labels = np.concatenate(all_labels, 0)
 
     H, W = imgs[0].shape[:2]
     camera_angle_x = float(meta["camera_angle_x"])
@@ -90,26 +184,11 @@ def load_blender_data(basedir, half_res=False, testskip=1, debug=False):
         0,
     )
 
-    # In debug mode, return extremely tiny images
-    if debug:
-        H = H // 32
-        W = W // 32
-        focal = focal / 32.0
-        imgs = [
-            torch.from_numpy(
-                cv2.resize(imgs[i], dsize=(25, 25), interpolation=cv2.INTER_AREA)
-            )
-            for i in range(imgs.shape[0])
-        ]
-        imgs = torch.stack(imgs, 0)
-        poses = torch.from_numpy(poses)
-        return imgs, poses, render_poses, [H, W, focal], i_split
-
     if half_res:
         # TODO: resize images using INTER_AREA (cv2)
-        H = H // 4
-        W = W // 4
-        focal = focal / 4.0
+        H = H // 2
+        W = W // 2
+        focal = focal / 2.0
     # H = H // 4
     # W = W // 4
     # focal = focal / 4.0
@@ -120,24 +199,65 @@ def load_blender_data(basedir, half_res=False, testskip=1, debug=False):
         for i in range(imgs.shape[0])
     ]
     imgs = torch.stack(imgs, 0)
+
+    imgs_off = [
+        torch.from_numpy(
+            cv2.resize(imgs_off[i], dsize=(W, H), interpolation=cv2.INTER_AREA)
+        )
+        for i in range(imgs_off.shape[0])
+    ]
+    imgs_off = torch.stack(imgs_off, 0)
+
+    normals = [
+        torch.from_numpy(
+            cv2.resize(normals[i], dsize=(W, H), interpolation=cv2.INTER_NEAREST)
+        )
+        for i in range(normals.shape[0])
+    ]
+    normals = torch.stack(normals, 0)
+
+    depths = [
+        torch.from_numpy(
+            cv2.resize(depths[i], dsize=(W, H), interpolation=cv2.INTER_NEAREST)
+        )
+        for i in range(depths.shape[0])
+    ]
+    depths = torch.stack(depths, 0)
+
+    labels = [
+        torch.from_numpy(
+            cv2.resize(labels[i], dsize=(W, H), interpolation=cv2.INTER_NEAREST)
+        )
+        for i in range(labels.shape[0])
+    ]
+    labels = torch.stack(labels, 0)
         #TODO for grayscale images manually expand one dimension
         # imgs = imgs.unsqueeze(-1).repeat(1,1,1,3)
 
     poses = torch.from_numpy(poses)
+    ir_poses = torch.from_numpy(ir_poses)
+    intrinsics = torch.from_numpy(intrinsics)
 
-    return imgs, poses, render_poses, [H, W, focal], i_split
+    roughness = None  # TODO
+    albedo = None   # TODO
+    #print(H,W,focal)
+    #print(imgs.shape, imgs_off.shape, intrinsics[0,:,:],poses[0,:,:])
+
+    #assert 1==0
+    return imgs, poses, ir_poses, render_poses, [H, W, focal], i_split, intrinsics, depths, labels, imgs_off, normals, roughness, albedo, all_names
 
 def load_pickle(filename):
     with open(filename, 'rb') as f:
         return pickle.load(f)
 
 
-def load_messytable_data(basedir, half_res=False, testskip=1, debug=False, cfg=None, is_rgb = False, sceneid = 1, gt_brdf=False):
-    basedir = os.path.join(basedir, str(sceneid))
+def load_messytable_data(basedir, half_res=False, testskip=1, debug=False, cfg=None, is_rgb = False, sceneid = "0", gt_brdf=False):
+    basedir = os.path.join(basedir, sceneid)
     imgname = cfg.dataset.imgname
     imgname_off = cfg.dataset.imgname_off
     label_n = cfg.dataset.labelname
     splits = ["train", "val", "test"]
+    #num_sample = {"train":100, "val":10, "test":10}
     metas = {}
     #for s in splits:
     #    with open(os.path.join(basedir, f"transforms_{s}.json"), "r") as fp:
@@ -227,40 +347,33 @@ def load_messytable_data(basedir, half_res=False, testskip=1, debug=False, cfg=N
             dummy_normal = np.zeros([np.sum(norm_mask),3])
             dummy_normal[:,-1] = 1.
             normal_img[norm_mask] = dummy_normal
-            #norm = np.linalg.norm(normal_img, axis=-1)
-            #print(norm_mask.shape, normal_img.shape)
-            #if np.sum(norm==0) > 0:
-            #    print(np.sum(norm==0))
-            #    print(normal_img[norm_mask].shape)
-            #    assert 1==0
-            
-            #print(cur_img.dtype)
-            #assert 1==0
-            #print(type(cur_img), cur_img.dtype)
-            #assert 1==0
-            #if len(cur_img.shape) != 3:
-            #    cur_img = np.array(cur_img)[...,None]
-            #    cur_img = np.concatenate((cur_img, cur_img, cur_img), axis=-1)
-            #    cur_img_off = np.array(cur_img_off)[...,None]
-            #    cur_img_off = np.concatenate((cur_img_off, cur_img_off, cur_img_off), axis=-1)
-                #print(cur_img.shape)
+
             H,W = cur_img.shape[:2]
             #print(cur_img.shape)
             #assert 1==0
-            #cur_pattern = cur_img - cur_img_off
+            #cur_pattern = cur_img - cur_img_offWW
             #cur_pattern = np.clip(cur_pattern, 0, 255)
             imgs.append(cur_img)
-            depths.append(np.array(Image.open(gt_depth_fname))/1000)
+            cdepth = np.array(Image.open(gt_depth_fname))/1000
+            depths.append(cdepth)
             poses.append(np.array(meta[extri_n]))
 
             ir_poses.append(np.array(meta["ir_transformation"]))
-            
-            labels.append(np.array(Image.open(label_fname)))
+            if os.path.exists(label_fname):
+                labels.append(np.array(Image.open(label_fname)))
+            else:
+                labelc = np.ones_like(cdepth)*18
+                mask = np.logical_and(cdepth < 5.5,  cdepth > 0)
+                labelc[mask] = 1
+                labelc = labelc.astype(np.uint8)
+                labels.append(labelc)
+            #print(labelc)
+            #assert 1==0
             imgs_off.append(cur_img_off)
             normals.append(normal_img)
             if half_res:
                 intrinsics_c = np.array(meta[intri_n])
-                intrinsics_c[:2,:] = intrinsics_c[:2,:]/4
+                intrinsics_c[:2,:] = intrinsics_c[:2,:]/2                                                                                      
                 #intrinsics_c[0,2] = 240.
                 #intrinsics_c[1,2] = 135.
                 intrinsics.append(intrinsics_c)
@@ -330,13 +443,13 @@ def load_messytable_data(basedir, half_res=False, testskip=1, debug=False, cfg=N
 
     if half_res:
         # TODO: resize images using INTER_AREA (cv2)
-        H = 270
-        W = 480
-        focal = focal / 4.0
+        H = cfg.dataset.H
+        W = cfg.dataset.W
+        focal = focal / 2.0
         #print(H,W)
     else:
-        H = 1080
-        W = 1920
+        H = cfg.dataset.H*2
+        W = cfg.dataset.W*2
         
     # H = H // 4
     # W = W // 4
@@ -555,13 +668,13 @@ def load_messytable_data_RF(basedir, half_res=False, testskip=1, debug=False, cf
 
     if half_res:
         # TODO: resize images using INTER_AREA (cv2)
-        H = 270
-        W = 480
+        H = cfg.dataset.H
+        W = cfg.dataset.W
         focal = focal / 4.0
         #print(H,W)
     else:
-        H = 1080
-        W = 1920
+        H = cfg.dataset.H*2
+        W = cfg.dataset.W*2
         
     # H = H // 4
     # W = W // 4

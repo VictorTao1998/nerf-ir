@@ -108,6 +108,7 @@ def get_ray_bundle(
             height, dtype=tform_cam2world.dtype, device=tform_cam2world.device
         ),
     )
+    """
     directions = torch.stack(
         [
             (ii - intrinsic[0,2]) / intrinsic[0,0],
@@ -120,6 +121,22 @@ def get_ray_bundle(
         directions[..., None, :] * torch.inverse(tform_cam2world[:3, :3]), dim=-1
     )
     ray_origins = torch.inverse(tform_cam2world)[:3, -1].expand(ray_directions.shape)
+    """
+
+    directions = torch.stack(
+        [
+            (ii - intrinsic[0,2]) / intrinsic[0,0],
+            -(jj - intrinsic[1,2]) / intrinsic[0,0],
+            -torch.ones_like(ii),
+        ],
+        dim=-1,
+    )
+    ray_directions = torch.sum(
+        directions[..., None, :] * tform_cam2world[:3, :3], dim=-1
+    )
+    ray_origins = tform_cam2world[:3, -1].expand(ray_directions.shape)
+
+
     origins = torch.zeros(ray_origins.shape)
     #print(ray_directions.shape)
     #assert 1==0

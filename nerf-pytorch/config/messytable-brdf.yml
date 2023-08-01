@@ -3,13 +3,13 @@ experiment:
   # Unique experiment identifier
   id: messytable-rgb
   # Experiment logs will be stored at "logdir"/"id"
-  logdir: ../logs_sim_brdf_cup_depth_gt_only2_depth_visual
+  logdir: ../logs_sim_lego_blender_dark_high_intrinsic_2_weighted3_visual
   # Seed for random number generators (for repeatability).
   randomseed: 11 #42  # Cause, why not?
   # Number of training iterations.
   train_iters: 250001
   finetune_start: 70000
-  jointtrain_start: 70000
+  jointtrain_start: 140000
   # Number of training iterations after which to validate.
   validate_every: 1000
   # Number of training iterations after which to checkpoint.
@@ -18,12 +18,12 @@ experiment:
   print_every: 1000
 
   swap_every: 20000
-  joint_start: 140000
+  joint_start: 200000
 
   normal_gt_rate: 0
   rougness_gt_rate: 0
   albedo_gt_rate: 0
-  depth_rate: 1
+  depth_rate: 0
 
   depth_rate_backup: 0
   
@@ -33,8 +33,8 @@ experiment:
   roughness_rate: 0
   normal_rate: 0
 
-  ir_on_rate: 0
-  ir_off_rate: 0
+  ir_on_rate: 0.1
+  ir_off_rate: 1
 
   grad_norm_rate: 0
 
@@ -47,7 +47,7 @@ dataset:
   # Type of dataset (Blender vs LLFF vs DeepVoxels vs something else)
   type: blender
   # Base directory of dataset.
-  basedir: /media/jianyu/dataset/mvs_nerf_cup/data
+  basedir: /media/jianyu/dataset/mvs_blend_nerf_remote
   is_rgb: False
   # Optionally, provide a path to the pre-cached dataset dir. This
   # overrides the other dataset options.
@@ -58,17 +58,17 @@ dataset:
   imgname_off: 0128_irL_kuafu_half_no_ir.png
   labelname: labelL.png
   half_res: True
-  H: 270
-  W: 480
+  H: 400
+  W: 400
   # Stride (include one per "testskip" images in the dataset).
   testskip: 1
   # Do not use NDC (normalized device coordinates). Usually True for
   # synthetic (Blender) datasets.
   no_ndc: True
   # Near clip plane (clip all depth values closer than this threshold).
-  near: 0.05
+  near: 2
   # Far clip plane (clip all depth values farther than this threshold).
-  far: 4
+  far: 6
 
 # Model parameters.
 models:
@@ -179,7 +179,7 @@ optimizer:
 # Learning rate schedule.
 scheduler:
   # Exponentially decay learning rate (in 1000 steps)
-  lr_decay: 50
+  lr_decay: 250
   # Rate at which to apply this decay.
   lr_decay_factor: 0.1
 
@@ -217,7 +217,7 @@ nerf:
   validation:
     # Number of random rays to retain from each image.
     # These sampled rays are used for training, and the others are discarded.
-    chunksize: 129600   # 1024 * 32
+    chunksize: 32768   # 1024 * 32
     # Whether or not to perturb the sampled depth values.
     perturb: False
     # Number of depth samples per ray for the coarse network.
@@ -236,7 +236,7 @@ nerf:
   test:
     # Number of random rays to retain from each image.
     # These sampled rays are used for training, and the others are discarded.
-    chunksize: 129600   # 1024 * 32
+    chunksize: 32768   # 1024 * 32
     # Whether or not to perturb the sampled depth values.
     perturb: False
     # Number of depth samples per ray for the coarse network.
