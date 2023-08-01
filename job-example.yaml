@@ -27,18 +27,10 @@ spec:
               memory: "16Gi"
               nvidia.com/gpu: "1"
           volumeMounts:
-            - name: cephfs
-              mountPath: /cephfs
-            - name: jet-fast-vol
-              mountPath: /jet
-            - name: jet-slow-vol
-              mountPath: /jet-slow
             - name: rayc-fast-vol
               mountPath: /rayc-fast
             - name: rayc-slow-vol
               mountPath: /rayc-slow
-            - name: jet-ris-vol
-              mountPath: /jet-ris
             - name: isabella-fast-vol
               mountPath: /isabella-fast
             - name: isabella-slow-vol
@@ -53,24 +45,12 @@ spec:
               mountPath: /edward-slow-vol
               
       volumes:
-        - name: cephfs
-          persistentVolumeClaim:
-            claimName: haosulab-cephfs
         - name: rayc-fast-vol
           persistentVolumeClaim:
             claimName: rayc-fast-vol
         - name: rayc-slow-vol
           persistentVolumeClaim:
             claimName: rayc-slow-vol
-        - name: jet-ris-vol
-          persistentVolumeClaim:
-            claimName: jet-ris-vol
-        - name: jet-fast-vol
-          persistentVolumeClaim:
-            claimName: jet-fast-vol
-        - name: jet-slow-vol
-          persistentVolumeClaim:
-            claimName: jet-slow-vol
         - name: isabella-fast-vol
           persistentVolumeClaim:
             claimName: isabella-fast-vol
