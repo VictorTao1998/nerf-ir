@@ -298,7 +298,7 @@ def main():
     for i in trange(start_iter, cfg.experiment.train_iters):
         if i == cfg.experiment.jointtrain_start:
             is_joint = True
-            model_backup = copy.deepcopy(model_fine)
+            #model_backup = copy.deepcopy(model_fine)
             #model_env_fine.eval()
             #for param in model_backup.parameters():
             #    param.requires_grad = False
