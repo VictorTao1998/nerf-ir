@@ -26,21 +26,17 @@ def run_network_ir_env(network_fn, pts, surf2c, surf2l, chunksize, embed_fn, emb
         input_dirs = viewdirs.expand(pts.shape)
         input_dirs_flat = input_dirs.reshape((-1, input_dirs.shape[-1]))
 
-        camdirs = surf2l[..., None, -3:]
-        output_dirs = camdirs.expand(pts.shape)
-        output_dirs_flat = output_dirs.reshape((-1, output_dirs.shape[-1]))
-
+        #camdirs = surf2l[..., None, -3:]
+        #output_dirs = camdirs.expand(pts.shape)
+        #output_dirs_flat = output_dirs.reshape((-1, output_dirs.shape[-1]))
+        output_dirs_flat = surf2l.reshape((-1, surf2l.shape[-1]))
 
         embedded_indirs = embeddirs_fn(input_dirs_flat)
         embedded_outdirs = embeddirs_fn(output_dirs_flat)
 
         embedded = torch.cat((embedded, embedded_indirs, embedded_outdirs), dim=-1)
 
-        #c_viewdirs = c_ray_batch[..., None, -3:]
-        #c_input_dirs = c_viewdirs.expand(c_pts.shape)
-        #c_input_dirs_flat = c_input_dirs.reshape((-1, c_input_dirs.shape[-1]))
-        #c_embedded_dirs = embeddirs_fn(c_input_dirs_flat)
-        #embedded = torch.cat((embedded, c_embedded_dirs), dim=-1)
+
 
     #print("before", pts_flat[0,:], c_pts_flat[0,:], viewdirs[0,:], c_viewdirs[0,:])
     #print(pts_flat[0,:],c_pts_flat[0,:],viewdirs[0,:], c_pts_flat.shape)
@@ -514,6 +510,9 @@ def volume_render_radiance_field_ir_env(
         else:
             direct_light, surf2l = model_env.get_light(surface_xyz.detach(), light_extrinsic) # bs x 3
 
+        surf2l = light_extrinsic[:3,3][None, None, ...] - pts
+
+        
         
         direct_light = direct_light.unsqueeze(-1).unsqueeze(-1)
 
@@ -525,30 +524,23 @@ def volume_render_radiance_field_ir_env(
 
         if is_env:
             #print('enter')
-            if joint == True:
-                radiance_field_env = run_network_ir_env(
-                    model_env,
-                    pts,  # bs x s x 3
-                    surf2c, # bs x 3
-                    surf2l, # bs x 3
-                    surface_xyz.shape[0],
-                    encode_position_fn,
-                    encode_direction_fn,
-                )
-            else :
-                radiance_field_env = run_network_ir_env(
-                    model_env,
-                    pts.detach(),  # bs x s x 3
-                    surf2c.detach(), # bs x 3
-                    surf2l, # bs x 3
-                    surface_xyz.shape[0],
-                    encode_position_fn,
-                    encode_direction_fn,
-                )
+            radiance_field_env = run_network_ir_env(
+                model_env,
+                pts,  # bs x s x 3
+                surf2c, # bs x 3
+                surf2l, # bs x 3
+                131072,
+                encode_position_fn,
+                encode_direction_fn,
+                
+            )
+
                 
         #radiance_field_env = radiance_field_env.squeeze(-1)
-
-        surf_brdf = weights[...,None] * radiance_field_env
+        if joint == True:
+            surf_brdf = weights[...,None] * radiance_field_env
+        else:
+            surf_brdf = weights[...,None].detach() * radiance_field_env
         surf_brdf = surf_brdf.sum(dim=-2)
         #print(direct_light.shape)
         #print(direct_light.shape, surf2l.shape)
