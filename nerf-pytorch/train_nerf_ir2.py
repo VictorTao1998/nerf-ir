@@ -22,7 +22,7 @@ from nerf import (CfgNode, get_embedding_function, get_ray_bundle, img2mse,
                   load_blender_data, load_llff_data, meshgrid_xy, models,
                   mse2psnr, run_one_iter_of_nerf, load_messytable_data,run_one_iter_of_nerf_ir)
 
-debug_output = False
+debug_output = True
 
 def init_weights(m):
     if isinstance(m, torch.nn.Linear):

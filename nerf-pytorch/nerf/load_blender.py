@@ -61,6 +61,7 @@ def load_blender_data(basedir, half_res=False, testskip=1, debug=False, sceneid=
     all_names = []
     counts = [0]
     for s in splits:
+        
         meta = metas[s]
         imgs = []
         imgs_off = []
@@ -71,6 +72,7 @@ def load_blender_data(basedir, half_res=False, testskip=1, debug=False, sceneid=
         depths = []
         labels = []
 
+        print(s, " ", len(meta["frames"]), " pictures")
         if s == "train" or testskip == 0:
             skip = 1
         else:
